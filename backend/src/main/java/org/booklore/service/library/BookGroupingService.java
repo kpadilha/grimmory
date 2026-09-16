@@ -44,8 +44,12 @@ public class BookGroupingService {
         Map<BookEntity, List<LibraryFile>> filesToAttach = new LinkedHashMap<>();
         List<LibraryFile> unmatched = new ArrayList<>();
 
+        // Fileless books cannot change while grouping runs: nothing is persisted in this loop.
+        // Querying per file is O(files x books) and stalls large libraries before any work starts.
+        List<BookEntity> filelessBooks = bookRepository.findFilelessBooksByLibraryId(libraryEntity.getId());
+
         for (LibraryFile file : newFiles) {
-            BookEntity match = findMatchingBook(file, mode);
+            BookEntity match = findMatchingBook(file, mode, filelessBooks);
             if (match != null) {
                 filesToAttach.computeIfAbsent(match, k -> new ArrayList<>()).add(file);
             } else {
@@ -144,10 +148,10 @@ public class BookGroupingService {
         return null;
     }
 
-    private BookEntity findMatchingBook(LibraryFile file, LibraryOrganizationMode mode) {
+    private BookEntity findMatchingBook(LibraryFile file, LibraryOrganizationMode mode, List<BookEntity> filelessBooks) {
         BookEntity filelessMatch = switch (mode) {
-            case BOOK_PER_FILE, BOOK_PER_FOLDER -> findExactFilelessMatch(file, file.getLibraryEntity());
-            case AUTO_DETECT -> findMatchingFilelessBook(file, file.getLibraryEntity());
+            case BOOK_PER_FILE, BOOK_PER_FOLDER -> findExactFilelessMatch(file, filelessBooks);
+            case AUTO_DETECT -> findMatchingFilelessBook(file, filelessBooks);
         };
         if (filelessMatch != null) {
             return filelessMatch;
@@ -183,8 +187,7 @@ public class BookGroupingService {
         };
     }
 
-    private BookEntity findExactFilelessMatch(LibraryFile file, LibraryEntity library) {
-        List<BookEntity> filelessBooks = bookRepository.findFilelessBooksByLibraryId(library.getId());
+    private BookEntity findExactFilelessMatch(LibraryFile file, List<BookEntity> filelessBooks) {
         if (filelessBooks.isEmpty()) {
             return null;
         }
@@ -209,8 +212,7 @@ public class BookGroupingService {
         return null;
     }
 
-    private BookEntity findMatchingFilelessBook(LibraryFile file, LibraryEntity library) {
-        List<BookEntity> filelessBooks = bookRepository.findFilelessBooksByLibraryId(library.getId());
+    private BookEntity findMatchingFilelessBook(LibraryFile file, List<BookEntity> filelessBooks) {
         if (filelessBooks.isEmpty()) {
             return null;
         }
