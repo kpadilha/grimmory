@@ -13,6 +13,7 @@ export const BOOK_QUERY_FACET_KEYS = [
   'mood',
   'language',
   'publisher',
+  'narrator',
   'library',
   'shelf',
   'file_type',
@@ -22,6 +23,8 @@ export const BOOK_QUERY_FACET_KEYS = [
   'goodreads_rating',
   'hardcover_rating',
   'ranobedb_rating',
+  'lubimyczytac_rating',
+  'audible_rating',
   'age_rating',
   'content_rating',
   'match_score',
@@ -57,6 +60,9 @@ export const BOOK_QUERY_SORT_KEYS = [
   'readStatus',
   'dateFinished',
   'readingProgress',
+  'random',
+  'authorName',
+  'authorSortName',
 ] as const;
 
 export type BookQueryFacetKey = typeof BOOK_QUERY_FACET_KEYS[number];
@@ -66,6 +72,13 @@ export type FacetValueMap = Readonly<Partial<Record<BookQueryFacetKey, readonly 
 export type SortDirection = BrowseSortDirection;
 
 export const EMPTY_FACET_SELECTION: FacetValueMap = {};
+
+// Unfiltered facet counts (library/shelf/shelf_status/series) back the sidebar badges - server-side
+// counts instead of downloading the whole collection just to .filter().length it client-side.
+export const GLOBAL_FACET_PARAMS: BookCollectionFilterParams = {
+  facets: EMPTY_FACET_SELECTION,
+  facetLogic: 'and',
+};
 
 export type BookSortTerm = BrowseSortTerm<BookQuerySortKey>;
 

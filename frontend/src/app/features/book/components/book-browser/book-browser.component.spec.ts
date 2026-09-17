@@ -4,9 +4,12 @@ import {ActivatedRoute, convertToParamMap, ParamMap, Router} from '@angular/rout
 import {BehaviorSubject, Subject} from 'rxjs';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {ConfirmationService, MessageService} from '@openng/optimus-ui/api';
+import {provideTanStackQuery, QueryClient} from '@tanstack/angular-query-experimental';
 
 import {PageTitleService} from '../../../../shared/service/page-title.service';
 import {BookService} from '../../service/book.service';
+import {BookQueryService} from '../../data/book-query.service';
+import {BookPageParams} from '../../data/book-query-params';
 import {BookMetadataManageService} from '../../service/book-metadata-manage.service';
 import {Book} from '../../model/book.model';
 import {SortDirection, SortOption} from '../../model/sort.model';
@@ -28,10 +31,17 @@ import {BookBrowserEntityService} from './book-browser-entity.service';
 import {RouteScrollPositionService} from '../../../../shared/service/route-scroll-position.service';
 import {AppSettingsService} from '../../../../shared/service/app-settings.service';
 import {BookBrowserComponent, EntityType} from './book-browser.component';
-import {SortService} from '../../service/sort.service';
 import {TranslocoService} from '@jsverse/transloco';
 import {LayoutService} from '../../../../shared/layout/layout.service';
 import {type VirtualGridMetrics} from '../../../../shared/util/virtual-grid.util';
+
+// TanStack's notification manager batches through a real macrotask, which fake timers never
+// fire - drop to real timers for one tick to let a mocked query settle, then restore.
+async function resolveQueries(): Promise<void> {
+  vi.useRealTimers();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  vi.useFakeTimers();
+}
 
 function makeBook(id: number, libraryId: number, title: string, addedOn: string): Book {
   return {
@@ -45,7 +55,7 @@ function makeBook(id: number, libraryId: number, title: string, addedOn: string)
   } as Book;
 }
 
-function makeCurrentUser() {
+function makeCurrentUser(options?: {visibleSortFields?: string[]}) {
   return {
     id: 1,
     username: 'tester',
@@ -87,7 +97,7 @@ function makeCurrentUser() {
     userSettings: {
       filterMode: 'and',
       enableSeriesView: false,
-      visibleSortFields: ['addedOn', 'title'],
+      visibleSortFields: options?.visibleSortFields ?? ['addedOn', 'title'],
       entityViewPreferences: {
         global: {
           sortKey: 'addedOn',
@@ -111,6 +121,13 @@ interface BookBrowserHarness {
   paramMap$: BehaviorSubject<ParamMap>;
   setHasNextPage: (value: boolean) => void;
   setIsFetchingNextPage: (value: boolean) => void;
+  bookQueryService: {
+    infinitePage: ReturnType<typeof vi.fn>;
+    facets: ReturnType<typeof vi.fn>;
+    ids: ReturnType<typeof vi.fn>;
+  };
+  // Spies bookService.books() - a scoped route must never call it (that's the 132k-book load).
+  booksSignalSpy: ReturnType<typeof vi.fn>;
   queryParamsService: {
     shouldForceExpandSeries: ReturnType<typeof vi.fn>;
     updateViewMode: ReturnType<typeof vi.fn>;
@@ -134,6 +151,11 @@ function createHarness(options?: {
   booksError?: string | null;
   isBooksLoading?: boolean;
   translate?: (key: string) => string;
+  visibleSortFields?: string[];
+  allBooksFacets?: {key: string; values: {value: string; title: string; count?: number}[]}[];
+  route?: {path: string; params?: Record<string, string>};
+  infinitePageError?: Error;
+  ids?: number[];
 }): BookBrowserHarness {
   const books = signal<Book[]>(
     options?.books ?? [
@@ -146,13 +168,41 @@ function createHarness(options?: {
   const isBooksLoading = signal<boolean>(options?.isBooksLoading ?? false);
   const isFetchingNextPage = signal(false);
   const hasNextPage = signal(false);
-  const currentUser = signal(makeCurrentUser());
+  const currentUser = signal(makeCurrentUser({visibleSortFields: options?.visibleSortFields}));
   const showFilter = signal(false);
   const seriesCollapsed = signal(false);
   const routerEvents$ = new Subject<unknown>();
-  const paramMap$ = new BehaviorSubject(convertToParamMap({libraryId: '1'}));
+  const routeParams = options?.route?.params ?? {libraryId: '1'};
+  const paramMap$ = new BehaviorSubject(convertToParamMap(routeParams));
   const queryParamMap$ = new BehaviorSubject(convertToParamMap({}));
   const url$ = new BehaviorSubject<unknown[]>([]);
+  const booksSignalSpy = vi.fn(() => books());
+  const infinitePageSpy = vi.fn((params: BookPageParams) => ({
+    queryKey: ['books', 'query', 'collection', 'page', 'infinite', 'harness', JSON.stringify(params)] as const,
+    queryFn: () => options?.infinitePageError
+      ? Promise.reject(options.infinitePageError)
+      : Promise.resolve({
+          content: books(),
+          page: {
+            number: 0,
+            size: books().length,
+            totalElements: options?.totalElements ?? books().length,
+            totalPages: 1,
+            cursor: '',
+          },
+          links: [],
+        }),
+    initialPageParam: null as string | null,
+    getNextPageParam: () => undefined,
+    // The real service applies QUERY_DEFAULTS (retry: false for a non-HTTP error); this mock
+    // bypasses that, so an error-state test needs the same guard or it burns through TanStack's
+    // default multi-second retry backoff.
+    retry: false,
+  }));
+  const idsSpy = vi.fn(() => ({
+    queryKey: ['books', 'query', 'collection', 'ids', 'harness'] as const,
+    queryFn: () => Promise.resolve(options?.ids ?? books().map(b => b.id)),
+  }));
   const defaultSort: SortOption = {field: 'addedOn', direction: SortDirection.DESCENDING, label: 'Added On'};
   const queryParamsService = {
     parseQueryParams: vi.fn((_q, _u, _et, _ei, _sortOptions, defaultFilterMode) => ({
@@ -171,16 +221,15 @@ function createHarness(options?: {
     updateMultiSort: vi.fn(),
   };
   const routeSnapshot = {
-    routeConfig: {path: 'library/:libraryId/books'},
+    routeConfig: {path: options?.route?.path ?? 'library/:libraryId/books'},
     paramMap: paramMap$.value,
     queryParamMap: queryParamMap$.value,
-    params: {libraryId: '1'},
+    params: routeParams,
   };
 
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [
-      SortService,
       BookSelectionService,
       BookNavigationService,
       {
@@ -230,6 +279,7 @@ function createHarness(options?: {
           selectedCount: signal(0),
           deselectAll: vi.fn(),
           setCurrentBooks: vi.fn(),
+          selectAll: vi.fn(),
         },
       },
       {
@@ -279,9 +329,24 @@ function createHarness(options?: {
       {
         provide: BookService,
         useValue: {
-          books: books.asReadonly(),
+          // Every book-browser route is server-paginated now; a call here would mean a route
+          // fell back to the 132k-book full load.
+          books: booksSignalSpy,
           isBooksLoading: isBooksLoading.asReadonly(),
           booksError: booksError.asReadonly(),
+        },
+      },
+      // Every route is now server-paginated, so injectInfiniteQuery always fetches.
+      provideTanStackQuery(new QueryClient()),
+      {
+        provide: BookQueryService,
+        useValue: {
+          infinitePage: infinitePageSpy,
+          facets: vi.fn(() => ({
+            queryKey: ['books', 'query', 'collection', 'facets', 'harness'] as const,
+            queryFn: () => Promise.resolve(options?.allBooksFacets ?? []),
+          })),
+          ids: idsSpy,
         },
       },
       {provide: BookMetadataManageService, useValue: {}},
@@ -303,10 +368,16 @@ function createHarness(options?: {
       {
         provide: BookBrowserEntityService,
         useValue: {
-          getEntityInfo: vi.fn((paramMap: ParamMap) => ({
-            entityId: Number(paramMap.get('libraryId')),
-            entityType: EntityType.LIBRARY,
-          })),
+          // Mirrors the real service: no library/shelf/magic-shelf id in the route means all-books.
+          getEntityInfo: vi.fn((paramMap: ParamMap) => {
+            const libraryId = paramMap.get('libraryId');
+            if (libraryId) return {entityId: Number(libraryId), entityType: EntityType.LIBRARY};
+            const shelfId = paramMap.get('shelfId');
+            if (shelfId) return {entityId: Number(shelfId), entityType: EntityType.SHELF};
+            const magicShelfId = paramMap.get('magicShelfId');
+            if (magicShelfId) return {entityId: Number(magicShelfId), entityType: EntityType.MAGIC_SHELF};
+            return {entityId: NaN, entityType: EntityType.ALL_BOOKS};
+          }),
           getEntity: vi.fn((entityId: number) => ({id: entityId, name: `Library ${entityId}`})),
           getBooksByEntity: vi.fn((items: Book[], entityId: number) =>
             items.filter(book => book.libraryId === entityId)
@@ -346,6 +417,8 @@ function createHarness(options?: {
     paramMap$,
     setHasNextPage: value => hasNextPage.set(value),
     setIsFetchingNextPage: value => isFetchingNextPage.set(value),
+    bookQueryService: {infinitePage: infinitePageSpy, facets: vi.fn(), ids: idsSpy},
+    booksSignalSpy,
     queryParamsService,
     routeSnapshot,
   };
@@ -379,63 +452,70 @@ describe('BookBrowserComponent', () => {
     expect(queryParamsService.updateViewMode).toHaveBeenCalledWith(VIEW_MODES.TABLE);
   });
 
-  it('updates books when sorting changes', () => {
-    const {component} = createHarness();
+  it('requests the updated sort term from the server when sorting changes', async () => {
+    const {component, bookQueryService} = createHarness();
 
+    await resolveQueries();
     TestBed.flushEffects();
-    vi.runOnlyPendingTimers();
-
-    expect(component.books().map(book => book.id)).toEqual([2, 1]);
 
     component.applySortCriteria([
       {label: 'Title', field: 'title', direction: SortDirection.ASCENDING},
     ]);
     TestBed.flushEffects();
-    vi.runOnlyPendingTimers();
 
-    expect(component.books().map(book => book.id)).toEqual([1, 2]);
+    const lastParams = vi.mocked(bookQueryService.infinitePage).mock.calls.at(-1)?.[0];
+    expect(lastParams?.sort).toEqual([{key: 'title', direction: 'asc'}]);
   });
 
-  it('updates books after a context change', () => {
-    const {component, paramMap$, routeSnapshot} = createHarness();
+  it('updates books after a context change', async () => {
+    const {component, books, paramMap$, routeSnapshot} = createHarness();
 
     TestBed.flushEffects();
-    vi.runOnlyPendingTimers();
+    await resolveQueries();
+    TestBed.flushEffects();
 
-    expect(component.books().map(book => book.id)).toEqual([2, 1]);
+    expect(component.books().map(book => book.id)).toEqual([2, 1, 3]);
 
+    books.set([makeBook(3, 2, 'Bravo', '2024-03-01T00:00:00Z')]);
     routeSnapshot.paramMap = convertToParamMap({libraryId: '2'});
     routeSnapshot.params = {libraryId: '2'};
     paramMap$.next(routeSnapshot.paramMap);
     TestBed.flushEffects();
-    vi.runOnlyPendingTimers();
+    await resolveQueries();
+    TestBed.flushEffects();
 
     expect(component.books().map(book => book.id)).toEqual([3]);
   });
 
-  it('hides loading placeholders when the books query is in an error state', () => {
-    const {component} = createHarness({
-      booksError: 'Failed to load books',
-      isBooksLoading: true,
-    });
+  it('hides loading placeholders when the books query is in an error state', async () => {
+    const {component} = createHarness({infinitePageError: new Error('Failed to load books')});
 
+    TestBed.flushEffects();
+    await resolveQueries();
+    TestBed.flushEffects();
+
+    expect(component.booksError()).toBe('Failed to load books');
     expect(component.showBooksLoadingPlaceholder()).toBe(false);
     expect(component.showTableLoadingPlaceholder()).toBe(false);
   });
 
-  it('keeps rendered books visible when loading starts after the first render', () => {
+  it('keeps rendered books visible across a search term change (placeholderData)', async () => {
     const renderedBooks = Array.from({length: 30}, (_, index) =>
       makeBook(index + 1, 1, `Book ${index + 1}`, `2024-01-${String(index + 1).padStart(2, '0')}T00:00:00Z`)
     );
-    const {component, isBooksLoading} = createHarness({books: renderedBooks});
+    const {component} = createHarness({books: renderedBooks});
 
     TestBed.flushEffects();
-    vi.runOnlyPendingTimers();
+    await resolveQueries();
+    TestBed.flushEffects();
 
     expect(component.books()).toHaveLength(30);
     expect(component.virtualRowCount()).toBe(30);
 
-    isBooksLoading.set(true);
+    // A new query key (search term) is now in flight; keepPreviousData must keep the grid full.
+    component.onSearchTermChange('book');
+    vi.advanceTimersByTime(500);
+    TestBed.flushEffects();
 
     expect(component.showBooksLoadingPlaceholder()).toBe(false);
     expect(component.virtualRowCount()).toBe(30);
@@ -469,6 +549,53 @@ describe('BookBrowserComponent', () => {
     expect(collapseBooksSpy).toHaveBeenCalled();
   });
 
+  it('offers only server-sortable fields in the all-books sort popover', () => {
+    const {component, paramMap$} = createHarness({
+      visibleSortFields: ['title', 'fileName', 'addedOn', 'locked', 'bookType'],
+    });
+    TestBed.flushEffects();
+
+    paramMap$.next(convertToParamMap({}));
+    TestBed.flushEffects();
+
+    expect(component.visibleSortOptions().map(o => o.field)).toEqual(['title', 'addedOn']);
+  });
+
+  it('restricts the sort menu to server-sortable fields on a library route too', () => {
+    const {component} = createHarness({
+      visibleSortFields: ['title', 'fileName', 'addedOn'],
+    });
+    TestBed.flushEffects();
+
+    expect(component.visibleSortOptions().map(o => o.field)).toEqual(['title', 'addedOn']);
+  });
+
+  it('passes the server facet total for a collapsed series on the all-books route, not the loaded-page count', async () => {
+    const {paramMap$} = createHarness({
+      allBooksFacets: [
+        {key: 'series', values: [{value: 'Dune Saga', title: 'Dune Saga', count: 9}]},
+      ],
+    });
+    paramMap$.next(convertToParamMap({}));
+    TestBed.flushEffects();
+
+    const filter = TestBed.inject(SeriesCollapseFilter);
+    filter.setCollapsed(true);
+    TestBed.flushEffects();
+
+    // The mocked facets() queryFn resolves through TanStack's own scheduling, which needs a
+    // real macrotask tick (fake timers never fire it) before the result signal updates.
+    vi.useRealTimers();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    TestBed.flushEffects();
+    vi.useFakeTimers();
+
+    const collapseBooksMock = vi.mocked(filter.collapseBooks);
+    const seriesCounts = collapseBooksMock.mock.calls.at(-1)?.[3] as ReadonlyMap<string, number> | undefined;
+
+    expect(seriesCounts?.get('Dune Saga')).toBe(9);
+  });
+
   it.skip('uses the known total book count while more pages are available', () => {
     const {component, setHasNextPage} = createHarness({totalElements: 100});
 
@@ -494,16 +621,95 @@ describe('BookBrowserComponent', () => {
     expect(component.virtualGrid.virtualizer.options().count).toBe(component.books().length + 1);
   });
 
-  it('uses the rendered book count once pagination is exhausted', () => {
+  it('uses the rendered book count once pagination is exhausted', async () => {
     const {component} = createHarness();
     const filter = TestBed.inject(SeriesCollapseFilter);
     vi.mocked(filter.collapseBooks).mockImplementation((items: Book[]) => items.slice(0, 1));
 
-    vi.runOnlyPendingTimers();
+    TestBed.flushEffects();
+    await resolveQueries();
     TestBed.flushEffects();
 
     expect(component.books()).toHaveLength(1);
     expect(component.virtualRowCount()).toBe(1);
     expect(component.virtualGrid.virtualizer.options().count).toBe(1);
+  });
+
+  describe('server-paginated entity routes', () => {
+    it('scopes the library route to a library facet and never touches bookService.books()', () => {
+      const {bookQueryService, booksSignalSpy} = createHarness({
+        route: {path: 'library/:libraryId/books', params: {libraryId: '7'}},
+      });
+      TestBed.flushEffects();
+
+      const params = vi.mocked(bookQueryService.infinitePage).mock.calls.at(-1)?.[0];
+      expect(params?.facets).toEqual({library: ['7']});
+      expect(booksSignalSpy).not.toHaveBeenCalled();
+    });
+
+    it('scopes the shelf route to a shelf facet', () => {
+      const {bookQueryService} = createHarness({
+        route: {path: 'shelf/:shelfId/books', params: {shelfId: '9'}},
+      });
+      TestBed.flushEffects();
+
+      const params = vi.mocked(bookQueryService.infinitePage).mock.calls.at(-1)?.[0];
+      expect(params?.facets).toEqual({shelf: ['9']});
+    });
+
+    it('scopes the magic-shelf route to a magic-prefixed shelf facet', () => {
+      const {bookQueryService} = createHarness({
+        route: {path: 'magic-shelf/:magicShelfId/books', params: {magicShelfId: '3'}},
+      });
+      TestBed.flushEffects();
+
+      const params = vi.mocked(bookQueryService.infinitePage).mock.calls.at(-1)?.[0];
+      expect(params?.facets).toEqual({shelf: ['magic:3']});
+    });
+
+    it('scopes the unshelved-books route to shelf_status:unshelved', () => {
+      const {bookQueryService} = createHarness({
+        route: {path: 'unshelved-books', params: {}},
+      });
+      TestBed.flushEffects();
+
+      const params = vi.mocked(bookQueryService.infinitePage).mock.calls.at(-1)?.[0];
+      expect(params?.facets).toEqual({shelf_status: ['unshelved']});
+    });
+  });
+
+  describe('selectAllBooks', () => {
+    it('selects the ids /books/ids returns and never touches bookService.books()', async () => {
+      const {component, bookQueryService, booksSignalSpy} = createHarness({
+        ids: [10, 11, 12],
+      });
+      TestBed.flushEffects();
+      await resolveQueries();
+      TestBed.flushEffects();
+
+      const selectionService = TestBed.inject(BookSelectionService);
+      const pending = component.selectAllBooks();
+      await resolveQueries();
+      await pending;
+
+      expect(bookQueryService.ids).toHaveBeenCalled();
+      expect(vi.mocked(selectionService.selectAll)).toHaveBeenCalledWith([10, 11, 12]);
+      expect(booksSignalSpy).not.toHaveBeenCalled();
+      expect(component.selectAllLoading()).toBe(false);
+    });
+
+    it('ignores a re-entrant call while a select-all request is in flight', async () => {
+      const {component, bookQueryService} = createHarness({ids: [1]});
+      TestBed.flushEffects();
+      await resolveQueries();
+      TestBed.flushEffects();
+
+      const first = component.selectAllBooks();
+      const second = component.selectAllBooks();
+      await resolveQueries();
+      await Promise.all([first, second]);
+
+      expect(bookQueryService.ids).toHaveBeenCalledTimes(1);
+    });
   });
 });

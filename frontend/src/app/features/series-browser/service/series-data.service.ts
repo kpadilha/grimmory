@@ -1,7 +1,12 @@
 import {computed, inject, Injectable} from '@angular/core';
+import {injectQuery} from '@tanstack/angular-query-experimental';
 import {BookService} from '../../book/service/book.service';
 import {Book, computeSeriesReadStatus, ReadStatus} from '../../book/model/book.model';
 import {SeriesSummary} from '../model/series.model';
+import {AuthService} from '../../../shared/service/auth.service';
+import {BookQueryService} from '../../book/data/book-query.service';
+import {GLOBAL_FACET_PARAMS} from '../../book/data/book-query-params';
+import {toFacetDistinctCount} from '../../book/data/book-query.models';
 
 @Injectable({
   providedIn: 'root'
@@ -9,8 +14,21 @@ import {SeriesSummary} from '../model/series.model';
 export class SeriesDataService {
 
   private bookService = inject(BookService);
+  private readonly authService = inject(AuthService);
+  private readonly bookQueryService = inject(BookQueryService);
+  private readonly token = this.authService.token;
 
+  // NOT migrated: needs per-series authors/categories/cover/dates, which /books/facets can't
+  // give (value+count only) - a bucketed series-summary aggregate is a future backend slice.
   allSeries = computed(() => this.buildSeriesSummaries(this.bookService.books()));
+
+  // Sidebar badge count - the server's exact, uncapped COUNT(DISTINCT series), not the full collection.
+  private readonly globalFacetsQuery = injectQuery(() => ({
+    ...this.bookQueryService.facets(GLOBAL_FACET_PARAMS),
+    enabled: !!this.token(),
+  }));
+
+  readonly totalSeriesCount = computed(() => toFacetDistinctCount(this.globalFacetsQuery.data(), 'series'));
 
   private buildSeriesSummaries(books: Book[]): SeriesSummary[] {
     const seriesMap = new Map<string, Book[]>();

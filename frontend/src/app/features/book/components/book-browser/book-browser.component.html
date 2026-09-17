@@ -411,6 +411,7 @@
                         outlined="true"
                         icon="pi pi-check-square"
                         severity="success"
+                        [loading]="selectAllLoading()"
                         (click)="selectAllBooks()"
                         [pTooltip]="t('tooltip.selectAll')"
                         tooltipPosition="top">

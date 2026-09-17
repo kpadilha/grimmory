@@ -12,7 +12,7 @@ import {MultiBookMetadataFetchComponent} from './multi-book-metadata-fetch-compo
 
 describe('MultiBookMetadataFetchComponent', () => {
   const appSettings = signal<AppSettings | null>(null);
-  const getBooksByIds = vi.fn((bookIds: number[]) => bookIds.map(bookId => ({
+  const getBooksByIds = vi.fn(async (bookIds: number[]) => bookIds.map(bookId => ({
     id: bookId,
     title: `Book ${bookId}`,
     libraryId: 1,
@@ -41,9 +41,9 @@ describe('MultiBookMetadataFetchComponent', () => {
     });
   });
 
-  it('reads dialog data and resolves the books to show on construction', () => {
+  it('reads dialog data and resolves the books to show on construction', async () => {
     const component = TestBed.runInInjectionContext(() => new MultiBookMetadataFetchComponent());
-    component.ngOnInit();
+    await component.ngOnInit();
 
     expect(component.bookIds).toEqual([3, 5]);
     expect(component.metadataRefreshType).toBe(MetadataRefreshType.BOOKS);
@@ -54,21 +54,21 @@ describe('MultiBookMetadataFetchComponent', () => {
     ]);
   });
 
-  it('gives precedence to dialogData Input over dynamicDialogConfig.data', () => {
+  it('gives precedence to dialogData Input over dynamicDialogConfig.data', async () => {
     const component = TestBed.runInInjectionContext(() => new MultiBookMetadataFetchComponent());
     component.dialogData = {
       bookIds: [10],
       metadataRefreshType: MetadataRefreshType.BOOKS,
     };
-    component.ngOnInit();
+    await component.ngOnInit();
 
     expect(component.bookIds).toEqual([10]);
     expect(getBooksByIds).toHaveBeenCalledWith([10]);
   });
 
-  it('adopts the default metadata refresh options when app settings become available', () => {
+  it('adopts the default metadata refresh options when app settings become available', async () => {
     const component = TestBed.runInInjectionContext(() => new MultiBookMetadataFetchComponent());
-    component.ngOnInit();
+    await component.ngOnInit();
 
     expect(component.currentMetadataOptions).toBeUndefined();
 

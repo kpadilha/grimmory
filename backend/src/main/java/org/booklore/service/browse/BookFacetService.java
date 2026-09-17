@@ -5,6 +5,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Tuple;
+import jakarta.persistence.TypedQuery;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Expression;
@@ -45,6 +46,12 @@ public class BookFacetService {
     private static final String PAGE_PATH = "/api/v1/books/page";
     private static final String FACET_PATH = "/api/v1/books/facets";
     private static final int MAX_VALUES = 100;
+
+    // Domain size is bounded by how many libraries/shelves exist, not by book count, so the
+    // per-value listing never needs the cap - the sidebar Map stays complete without a second query.
+    private static final Set<String> UNCAPPED_FACETS = Set.of("library", "shelf");
+    // High-cardinality group where the sidebar needs an exact total distinct from the capped list.
+    private static final Set<String> DISTINCT_COUNT_FACETS = Set.of("series");
 
     private static final List<FacetDef> FACETS = List.of(
             new FacetDef("author", "Authors", (cb, root, userId) -> metadata(root).join("authors", JoinType.LEFT).get("name")),
@@ -124,7 +131,8 @@ public class BookFacetService {
             groups.add(sortGroup(preserved));
             for (FacetDef def : FACETS) {
                 Specification<BookEntity> base = filterSpecifications.base(query, facets, facetLogic, userId, isAdmin, libraryIds, def.key());
-                groups.add(toGroup(def, count(def, base, userId), facet, preserved));
+                Long distinctCount = DISTINCT_COUNT_FACETS.contains(def.key()) ? distinctCount(def, base, userId) : null;
+                groups.add(toGroup(def, count(def, base, userId), distinctCount, facet, preserved));
             }
             List<Link> links = List.of(Link.json(List.of("self"), href(FACET_PATH, preserved)));
             return new FacetGroupsResponse(links, groups);
@@ -155,12 +163,36 @@ public class BookFacetService {
         cq.groupBy(value);
         cq.orderBy(cb.desc(count), cb.asc(value));
 
-        return entityManager.createQuery(cq).setMaxResults(MAX_VALUES).getResultList().stream()
+        TypedQuery<Tuple> typedQuery = entityManager.createQuery(cq);
+        if (!UNCAPPED_FACETS.contains(def.key())) {
+            typedQuery.setMaxResults(MAX_VALUES);
+        }
+        return typedQuery.getResultList().stream()
                 .map(tuple -> new FacetCount(String.valueOf(tuple.get("value")), ((Number) tuple.get("count")).longValue()))
                 .toList();
     }
 
-    private FacetGroup toGroup(FacetDef def, List<FacetCount> counts, List<String> facet, String preserved) {
+    // Exact COUNT(DISTINCT ...) over the same scoped predicate as count(), never the capped
+    // top-100 list - the only way to report a total for a group larger than MAX_VALUES.
+    private Long distinctCount(FacetDef def, Specification<BookEntity> base, Long userId) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Long> cq = cb.createQuery(Long.class);
+        Root<BookEntity> root = cq.from(BookEntity.class);
+        Expression<?> value = def.value().apply(cb, root, userId);
+
+        List<Predicate> predicates = new ArrayList<>();
+        Predicate basePredicate = base.toPredicate(root, cq, cb);
+        if (basePredicate != null) {
+            predicates.add(basePredicate);
+        }
+        predicates.add(cb.isNotNull(value));
+
+        cq.select(cb.countDistinct(value));
+        cq.where(predicates.toArray(Predicate[]::new));
+        return entityManager.createQuery(cq).getSingleResult();
+    }
+
+    private FacetGroup toGroup(FacetDef def, List<FacetCount> counts, Long distinctCount, List<String> facet, String preserved) {
         List<FacetLink> links = counts.stream()
                 .map(c -> {
                     boolean active = BrowseParams.hasFacet(facet, def.key(), c.value());
@@ -171,7 +203,7 @@ public class BookFacetService {
                     return new FacetLink(rel, href, Link.JSON_TYPE, c.value(), c.value(), new Properties(c.count()));
                 })
                 .toList();
-        return new FacetGroup(new Metadata("facet", def.key(), def.title()), links);
+        return new FacetGroup(new Metadata("facet", def.key(), def.title()), links, distinctCount);
     }
 
     private FacetGroup sortGroup(String preserved) {
@@ -183,7 +215,7 @@ public class BookFacetService {
             links.add(new FacetLink(List.of("sort"), pageLink(preserved, "sort=" + BrowseParams.encode(key)), Link.JSON_TYPE, key + " ascending", key, null));
             links.add(new FacetLink(List.of("sort"), pageLink(preserved, "sort=-" + BrowseParams.encode(key)), Link.JSON_TYPE, key + " descending", "-" + key, null));
         }
-        return new FacetGroup(new Metadata("sort", "sort", "Sort"), links);
+        return new FacetGroup(new Metadata("sort", "sort", "Sort"), links, null);
     }
 
     private static String pageLink(String preserved, String param) {

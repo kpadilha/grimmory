@@ -30,9 +30,16 @@ import {BookCardOverlayPreferenceService} from '../book-browser/book-card-overla
 import {UrlHelperService} from '../../../../shared/service/url-helper.service';
 import {LanguageResolverService} from '../../../../shared/service/language-resolver.service';
 import {CoverComponent} from '../../../../shared/components/cover/cover.component';
-import {injectQuery} from '@tanstack/angular-query-experimental';
+import {injectInfiniteQuery, injectQuery} from '@tanstack/angular-query-experimental';
 import {AuthorService} from '../../../author-browser/service/author.service';
 import {LayoutService} from '../../../../shared/layout/layout.service';
+import {BookQueryService} from '../../data/book-query.service';
+import {BookPageParams} from '../../data/book-query-params';
+import {bookSummaryToBook, flattenBookPages} from '../../data/book-query.models';
+
+// Max page size the server allows (see application.yaml); a series past this needs more than
+// one round trip, which drainSeriesPagesEffect below handles.
+const SERIES_PAGE_SIZE = 100;
 
 interface ReadStatusSegment {
   status: ReadStatus;
@@ -120,6 +127,7 @@ export class SeriesPageComponent implements AfterViewChecked {
   protected urlHelper = inject(UrlHelperService);
   private authorService = inject(AuthorService);
   private layoutService = inject(LayoutService);
+  private bookQueryService = inject(BookQueryService);
 
   private readonly descriptionContentRef = viewChild<ElementRef<HTMLElement>>('descriptionContent');
   private readonly seriesGridElement = viewChild<ElementRef<HTMLElement>>('seriesGrid');
@@ -129,7 +137,9 @@ export class SeriesPageComponent implements AfterViewChecked {
   readonly isOverflowing = signal(false);
   protected appSettings = this.appSettingsService.appSettings;
   protected currentUser = this.userService.currentUser;
-  protected isBooksLoading = this.bookService.isBooksLoading;
+  // Lazy computed - safe to reference seriesBooksQuery here even though it's declared later,
+  // since the callback only runs on first read, well after all fields are initialized.
+  protected isBooksLoading = computed(() => this.seriesBooksQuery.isPending());
 
   // Selection state
   readonly selectedBooks = signal(new Set<number>());
@@ -147,11 +157,31 @@ export class SeriesPageComponent implements AfterViewChecked {
     map((params) => params.get("seriesName") || ""),
   ), {initialValue: ""});
 
+  // Server-scoped to this one series via the 'series' facet - never the full collection.
+  private readonly seriesQueryParams = computed<BookPageParams>(() => {
+    const seriesName = this.seriesParam().trim();
+    return {
+      facets: seriesName ? {series: [seriesName]} : {},
+      facetLogic: 'and',
+      sort: [{key: 'seriesNumber', direction: 'asc'}],
+      size: SERIES_PAGE_SIZE,
+    };
+  });
+  private readonly seriesBooksQuery = injectInfiniteQuery(() => ({
+    ...this.bookQueryService.infinitePage(this.seriesQueryParams()),
+    enabled: this.seriesParam().trim().length > 0,
+  }));
+  // The page renders every book in the series at once (no scroll pagination), so drain pages
+  // automatically instead of waiting for user scroll - the 100-per-page cap (application.yaml)
+  // keeps this to a single request for the overwhelming majority of series.
+  private readonly drainSeriesPagesEffect = effect(() => {
+    if (this.seriesBooksQuery.hasNextPage() && !this.seriesBooksQuery.isFetchingNextPage()) {
+      void this.seriesBooksQuery.fetchNextPage();
+    }
+  });
+
   filteredBooks = computed(() => {
-    const seriesName = this.seriesParam().trim().toLowerCase();
-    const inSeries = this.bookService.books().filter(
-      (book) => book.metadata?.seriesName?.trim().toLowerCase() === seriesName
-    );
+    const inSeries = flattenBookPages(this.seriesBooksQuery.data()).map(bookSummaryToBook);
 
     return [...inSeries].sort((a, b) => {
       const aNum = a.metadata?.seriesNumber ?? Number.MAX_SAFE_INTEGER;

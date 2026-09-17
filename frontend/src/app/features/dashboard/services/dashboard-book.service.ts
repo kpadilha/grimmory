@@ -1,168 +1,134 @@
 import {computed, inject, Injectable} from '@angular/core';
-import {BookService} from '../../book/service/book.service';
-import {Book, ReadStatus} from '../../book/model/book.model';
-import {MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
-import {BookRuleEvaluatorService} from '../../magic-shelf/service/book-rule-evaluator.service';
-import {SortService} from '../../book/service/sort.service';
-import {ScrollerConfig, ScrollerType} from '../models/dashboard-config.model';
-import {SortDirection, SortOption} from '../../book/model/sort.model';
-import {DashboardConfigService} from './dashboard-config.service';
-import {GroupRule} from '../../magic-shelf/component/magic-shelf-component';
+import {injectQueries} from '@tanstack/angular-query-experimental/inject-queries-experimental';
 
-const DEFAULT_MAX_ITEMS = 20;
+import {Book, ReadStatus} from '../../book/model/book.model';
+import {SortDirection, SortOption} from '../../book/model/sort.model';
+import {BookQueryService} from '../../book/data/book-query.service';
+import {BookPageParams, BookSortTerm, DEFAULT_BOOK_SORT_TERMS} from '../../book/data/book-query-params';
+import {bookSummaryToBook} from '../../book/data/book-query.models';
+import {toBookSortTerms} from '../../book/components/book-browser/all-books-query.mapper';
+import {MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
+import {DEFAULT_MAX_ITEMS, ScrollerConfig, ScrollerType} from '../models/dashboard-config.model';
+import {DashboardConfigService} from './dashboard-config.service';
+
+// LAST_READ/LAST_LISTENED candidates: readStatus and lastReadTime live on one UserBookProgress
+// row per book (shared by ebook and audiobook activity), so the server can't filter by format.
+// Overfetch a bounded candidate page and split by format client-side below.
+const RECENT_ACTIVITY_CANDIDATE_MULTIPLIER = 5;
+const RECENT_ACTIVITY_CANDIDATE_CAP = 200;
+const RECENT_ACTIVITY_STATUSES = [ReadStatus.READING, ReadStatus.RE_READING, ReadStatus.PAUSED];
+
+// Matches the pre-migration in-memory filter: RE_READING and UNSET/no-progress books stay candidates.
+const RANDOM_EXCLUDED_STATUSES = [
+  ReadStatus.READ, ReadStatus.PARTIALLY_READ, ReadStatus.READING,
+  ReadStatus.PAUSED, ReadStatus.WONT_READ, ReadStatus.ABANDONED,
+];
 
 @Injectable({
   providedIn: 'root'
 })
 export class DashboardBookService {
-  private readonly bookService = inject(BookService);
+  private readonly bookQueryService = inject(BookQueryService);
   private readonly magicShelfService = inject(MagicShelfService);
-  private readonly ruleEvaluatorService = inject(BookRuleEvaluatorService);
-  private readonly sortService = inject(SortService);
   private readonly configService = inject(DashboardConfigService);
 
+  private readonly enabledScrollers = computed(() =>
+    this.configService.config().scrollers.filter(scroller => scroller.enabled)
+  );
+
+  // One small server-paged query per scroller - never the full collection. Scrollers with
+  // identical params (LAST_READ/LAST_LISTENED) share a single cached request automatically.
+  private readonly scrollerQueries = injectQueries(() => ({
+    queries: this.enabledScrollers().map(scroller => ({
+      ...this.bookQueryService.page(this.paramsForScroller(scroller)),
+      enabled: this.isFetchable(scroller),
+    })),
+  }));
+
+  // A disabled query (e.g. a stale magic-shelf id) stays isPending() forever without ever
+  // fetching - isEnabled() excludes it so it can't pin the dashboard spinner on indefinitely.
+  readonly isLoading = computed(() => this.scrollerQueries().some(query => query.isEnabled() && query.isPending()));
+
   /**
-   * Computed map of scroller ID to its filtered book list.
+   * Computed map of scroller ID to its server-paged book list.
    * This centralizes all dashboard filtering logic and keeps it reactive.
    */
   readonly scrollerBooksMap = computed(() => {
-    const config = this.configService.config();
-    const books = this.bookService.books();
-    const shelves = this.magicShelfService.shelves();
+    const scrollers = this.enabledScrollers();
+    const results = this.scrollerQueries();
     const scrollerMap = new Map<string, Book[]>();
 
-    for (const scroller of config.scrollers) {
-      if (!scroller.enabled) continue;
-      scrollerMap.set(scroller.id, this.getBooksForConfig(scroller, books, shelves));
-    }
+    scrollers.forEach((scroller, index) => {
+      const books = (results[index]?.data()?.content ?? []).map(bookSummaryToBook);
+      scrollerMap.set(scroller.id, this.refineForScrollerType(scroller, books));
+    });
 
     return scrollerMap;
   });
 
-  private getBooksForConfig(config: ScrollerConfig, books: Book[], magicShelves: {id?: number | null; filterJson: string}[]): Book[] {
-    switch (config.type) {
-      case ScrollerType.LAST_READ:
-        return this.getLastReadBooks(books, config.maxItems || DEFAULT_MAX_ITEMS);
-      case ScrollerType.LAST_LISTENED:
-        return this.getLastListenedBooks(books, config.maxItems || DEFAULT_MAX_ITEMS);
+  private isFetchable(scroller: ScrollerConfig): boolean {
+    if (scroller.type !== ScrollerType.MAGIC_SHELF) return true;
+    return scroller.magicShelfId != null
+      && this.magicShelfService.shelves().some(shelf => shelf.id === scroller.magicShelfId);
+  }
+
+  private paramsForScroller(scroller: ScrollerConfig): BookPageParams {
+    const size = scroller.maxItems || DEFAULT_MAX_ITEMS;
+
+    switch (scroller.type) {
       case ScrollerType.LATEST_ADDED:
-        return this.getLatestAddedBooks(books, config.maxItems || DEFAULT_MAX_ITEMS);
+        return {facets: {}, facetLogic: 'and', sort: [{key: 'addedOn', direction: 'desc'}], size};
+
+      case ScrollerType.LAST_READ:
+      case ScrollerType.LAST_LISTENED:
+        return {
+          facets: {read_status: RECENT_ACTIVITY_STATUSES},
+          facetLogic: 'and',
+          sort: [{key: 'lastReadTime', direction: 'desc'}],
+          size: Math.min(size * RECENT_ACTIVITY_CANDIDATE_MULTIPLIER, RECENT_ACTIVITY_CANDIDATE_CAP),
+        };
+
       case ScrollerType.RANDOM:
-        return this.getRandomBooks(books, config.maxItems || DEFAULT_MAX_ITEMS);
+        return {facets: {read_status: RANDOM_EXCLUDED_STATUSES}, facetLogic: 'not', sort: [{key: 'random', direction: 'asc'}], size};
+
       case ScrollerType.MAGIC_SHELF:
-        return this.getMagicShelfBooks(config, books, magicShelves);
-      default:
-        return [];
+        return {
+          facets: scroller.magicShelfId != null ? {shelf: [`magic:${scroller.magicShelfId}`]} : {},
+          facetLogic: 'and',
+          sort: this.magicShelfSortTerms(scroller),
+          size,
+        };
     }
   }
 
-  private getLastReadBooks(books: Book[], maxItems: number): Book[] {
-    const recentBooks = books.filter(book =>
-      book.lastReadTime &&
-      (book.readStatus === ReadStatus.READING || book.readStatus === ReadStatus.RE_READING || book.readStatus === ReadStatus.PAUSED) &&
-      this.hasEbookProgress(book)
-    );
+  private magicShelfSortTerms(scroller: ScrollerConfig): readonly BookSortTerm[] {
+    if (!scroller.sortField || !scroller.sortDirection) {
+      return DEFAULT_BOOK_SORT_TERMS;
+    }
 
-    return recentBooks.sort((a, b) => {
-      const aTime = new Date(a.lastReadTime!).getTime();
-      const bTime = new Date(b.lastReadTime!).getTime();
-      return bTime - aTime;
-    }).slice(0, maxItems);
+    const sortOption: SortOption = {
+      label: '',
+      field: scroller.sortField,
+      direction: scroller.sortDirection === 'asc' ? SortDirection.ASCENDING : SortDirection.DESCENDING,
+    };
+
+    return toBookSortTerms([sortOption]);
   }
 
-  private getLastListenedBooks(books: Book[], maxItems: number): Book[] {
-    const recentBooks = books.filter(book =>
-      book.lastReadTime &&
-      (book.readStatus === ReadStatus.READING || book.readStatus === ReadStatus.RE_READING || book.readStatus === ReadStatus.PAUSED) &&
-      book.audiobookProgress
-    );
+  private refineForScrollerType(scroller: ScrollerConfig, books: Book[]): Book[] {
+    const maxItems = scroller.maxItems || DEFAULT_MAX_ITEMS;
 
-    return recentBooks.sort((a, b) => {
-      const aTime = new Date(a.lastReadTime!).getTime();
-      const bTime = new Date(b.lastReadTime!).getTime();
-      return bTime - aTime;
-    }).slice(0, maxItems);
+    switch (scroller.type) {
+      case ScrollerType.LAST_READ:
+        return books.filter(book => this.hasEbookProgress(book)).slice(0, maxItems);
+      case ScrollerType.LAST_LISTENED:
+        return books.filter(book => !!book.audiobookProgress).slice(0, maxItems);
+      default:
+        return books.slice(0, maxItems);
+    }
   }
 
   private hasEbookProgress(book: Book): boolean {
     return !!(book.epubProgress || book.pdfProgress || book.cbxProgress || book.koreaderProgress || book.koboProgress);
-  }
-
-  private getLatestAddedBooks(books: Book[], maxItems: number): Book[] {
-    const addedBooks = books.filter(book => book.addedOn);
-
-    return addedBooks.sort((a, b) => {
-      const aTime = new Date(a.addedOn!).getTime();
-      const bTime = new Date(b.addedOn!).getTime();
-      return bTime - aTime;
-    }).slice(0, maxItems);
-  }
-
-  private getRandomBooks(books: Book[], maxItems: number): Book[] {
-    const excludedStatuses = new Set<ReadStatus>([
-      ReadStatus.READ,
-      ReadStatus.PARTIALLY_READ,
-      ReadStatus.READING,
-      ReadStatus.PAUSED,
-      ReadStatus.WONT_READ,
-      ReadStatus.ABANDONED
-    ]);
-
-    const candidates = books.filter(book =>
-      !book.readStatus || !excludedStatuses.has(book.readStatus)
-    );
-
-    return this.shuffleBooks(candidates, maxItems);
-  }
-
-  private getMagicShelfBooks(
-    config: ScrollerConfig,
-    books: Book[],
-    magicShelves: {id?: number | null; filterJson: string}[]
-  ): Book[] {
-    const shelf = magicShelves.find(currentShelf => currentShelf.id === config.magicShelfId);
-    if (!shelf) {
-      return [];
-    }
-
-    let group: GroupRule;
-    try {
-      group = JSON.parse(shelf.filterJson);
-    } catch (e) {
-      console.error('Invalid filter JSON', e);
-      return [];
-    }
-
-    let filteredBooks = books.filter(book =>
-      this.ruleEvaluatorService.evaluateGroup(book, group, books)
-    );
-
-    if (config.sortField && config.sortDirection) {
-      const sortOption = this.createSortOption(config.sortField, config.sortDirection);
-      filteredBooks = this.sortService.applySort(filteredBooks, sortOption);
-    }
-
-    if (config.maxItems) {
-      filteredBooks = filteredBooks.slice(0, config.maxItems);
-    }
-
-    return filteredBooks;
-  }
-
-  private createSortOption(field: string, direction: string): SortOption {
-    return {
-      field,
-      direction: direction === 'asc' ? SortDirection.ASCENDING : SortDirection.DESCENDING,
-      label: ''
-    };
-  }
-
-  private shuffleBooks(books: Book[], maxItems: number): Book[] {
-    const shuffled = [...books];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    return shuffled.slice(0, maxItems);
   }
 }

@@ -78,6 +78,31 @@ describe('SeriesCollapseFilter', () => {
     ]);
   });
 
+  it('uses the real per-series count from the override map instead of the loaded-page count', () => {
+    const books = [
+      makeBook(1, 'Series', 2),
+      makeBook(2, 'Series', 1),
+    ];
+    // Only 2 of the series' books are in this page, but the server-side total is 7.
+    const overrideCounts = new Map([['Series', 7]]);
+
+    const collapsed = service.collapseBooks(books, false, true, overrideCounts);
+
+    expect(collapsed).toEqual([{
+      ...makeBook(2, 'Series', 1),
+      seriesBooks: [books[0], books[1]],
+      seriesCount: 7
+    }]);
+  });
+
+  it('falls back to the loaded-page count for a series missing from the override map', () => {
+    const books = [makeBook(1, 'Series', 1), makeBook(2, 'Series', 2)];
+
+    const collapsed = service.collapseBooks(books, false, true, new Map());
+
+    expect(collapsed[0].seriesCount).toBe(2);
+  });
+
   it('persists context-aware and global preferences with legacy fallbacks', () => {
     const user = {
       id: 1,

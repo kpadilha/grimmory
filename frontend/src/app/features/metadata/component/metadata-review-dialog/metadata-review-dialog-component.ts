@@ -34,13 +34,16 @@ export class MetadataReviewDialogComponent implements OnInit {
   loading = signal(true);
   readonly proposals = signal<FetchedProposal[]>([]);
   readonly currentIndex = signal(0);
+  // Keyed by id from the one /books/batch fetch below - the review dialog only ever needs the
+  // handful of books its proposals name, never the full collection.
+  private readonly proposalBooks = signal<Map<number, Book>>(new Map());
   readonly currentBook = computed<Book | null>(() => {
     const proposal = this.proposals()[this.currentIndex()];
     if (!proposal) {
       return null;
     }
 
-    return this.bookService.findBookById(proposal.bookId) ?? null;
+    return this.proposalBooks().get(proposal.bookId) ?? null;
   });
 
   constructor() {
@@ -50,9 +53,12 @@ export class MetadataReviewDialogComponent implements OnInit {
         return;
       }
 
-      const bookIds = new Set(proposals.map(proposal => proposal.bookId));
-      const matchedBooks = this.bookService.books().filter(book => bookIds.has(book.id));
-      this.loading.set(matchedBooks.length !== bookIds.size);
+      const bookIds = [...new Set(proposals.map(proposal => proposal.bookId))];
+      this.loading.set(true);
+      this.bookService.getBooksByIds(bookIds).then(books => {
+        this.proposalBooks.set(new Map(books.map(book => [book.id, book])));
+        this.loading.set(false);
+      });
     });
   }
 

@@ -326,9 +326,9 @@ export class BookMenuService {
              icon: 'pi pi-exclamation-triangle',
              acceptLabel: this.t.translate('common.yes'),
              rejectLabel: this.t.translate('common.no'),
-             accept: () => {
+             accept: async () => {
                const loader = this.loadingService.show(this.t.translate('book.menuService.loading.removingFromShelves', {count}));
-               const books = this.bookService.getBooksByIds(Array.from(selectedBooks));
+               const books = await this.bookService.getBooksByIds(Array.from(selectedBooks));
                const allShelfIds = new Set<number>();
                books.forEach(b => b.shelves?.forEach(s => {
                  if (s.id) allShelfIds.add(s.id);

@@ -1,16 +1,23 @@
-import { Component, computed, inject, OnInit, OnDestroy, AfterViewInit, ElementRef, ViewChild, Signal, signal } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, AfterViewInit, ElementRef, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DynamicDialogRef, DynamicDialogConfig } from '@openng/optimus-ui/dynamicdialog';
 import { AutoComplete, AutoCompleteSelectEvent } from '@openng/optimus-ui/autocomplete';
 import { Button } from '@openng/optimus-ui/button';
 import { Checkbox } from '@openng/optimus-ui/checkbox';
 import { Subject, takeUntil } from 'rxjs';
-import { BookService } from '../../service/book.service';
+import { QueryClient } from '@tanstack/angular-query-experimental';
+import { BookQueryService } from '../../data/book-query.service';
+import { BookPageParams, DEFAULT_BOOK_SORT_TERMS } from '../../data/book-query-params';
+import { bookSummaryToBook } from '../../data/book-query.models';
 import { BookFileService } from '../../service/book-file.service';
 import { Book } from '../../model/book.model';
 import { MessageService } from '@openng/optimus-ui/api';
 import { TranslocoDirective, TranslocoPipe, TranslocoService } from '@jsverse/transloco';
 import { AppSettingsService } from '../../../../shared/service/app-settings.service';
+
+// A candidate window wide enough that excluding the source books afterwards still leaves
+// (at most sourceBooks.length fewer than) a full page of 20 results.
+const CANDIDATE_PAGE_SIZE = 20;
 
 @Component({
   selector: 'app-book-file-attacher',
@@ -38,13 +45,15 @@ export class BookFileAttacherComponent implements OnInit, AfterViewInit, OnDestr
   autocomplePanelStyle: Record<string, string> = {};
 
   private destroy$ = new Subject<void>();
-  private allBooks: Signal<Book[]> = signal([]);
+  private libraryId: number | null = null;
+  private sourceBookIds = new Set<number>();
 
   private readonly t = inject(TranslocoService);
   private readonly appSettingsService = inject(AppSettingsService);
   private dialogRef = inject(DynamicDialogRef);
   private config = inject(DynamicDialogConfig);
-  private bookService = inject(BookService);
+  private bookQueryService = inject(BookQueryService);
+  private queryClient = inject(QueryClient);
   private bookFileService = inject(BookFileService);
   private messageService = inject(MessageService);
 
@@ -76,16 +85,10 @@ export class BookFileAttacherComponent implements OnInit, AfterViewInit, OnDestr
     }
 
     // Get the library ID from first source book (all should be same library)
-    const libraryId = this.sourceBooks[0].libraryId;
-    const sourceBookIds = new Set(this.sourceBooks.map(b => b.id));
+    this.libraryId = this.sourceBooks[0].libraryId;
+    this.sourceBookIds = new Set(this.sourceBooks.map(b => b.id));
 
-    this.allBooks = computed(() =>
-      this.bookService.books().filter(book =>
-        book.libraryId === libraryId && !sourceBookIds.has(book.id)
-      )
-    );
-
-    this.filteredBooks = this.allBooks().slice(0, 20);
+    void this.searchCandidates('').then(books => this.filteredBooks = books);
   }
 
   ngOnDestroy(): void {
@@ -98,20 +101,26 @@ export class BookFileAttacherComponent implements OnInit, AfterViewInit, OnDestr
   }
 
   filterBooks(event: { query: string; }): void {
-    const query = event.query.toLowerCase().trim();
-    const books = this.allBooks();
-    if (!query) {
-      this.filteredBooks = books.slice(0, 20);
-      return;
-    }
+    void this.searchCandidates(event.query.trim()).then(books => this.filteredBooks = books);
+  }
 
-    this.filteredBooks = books
-      .filter(book => {
-        const title = book.metadata?.title?.toLowerCase() || '';
-        const authors = book.metadata?.authors?.join(' ').toLowerCase() || '';
-        return title.includes(query) || authors.includes(query);
-      })
-      .slice(0, 20);
+  // Server-side search scoped to the source books' library - never the full collection.
+  // Overfetches by sourceBookIds.size so excluding the source books afterwards still leaves
+  // a full page of candidates.
+  private async searchCandidates(query: string): Promise<Book[]> {
+    const params: BookPageParams = {
+      ...(query ? {query} : {}),
+      facets: this.libraryId != null ? {library: [String(this.libraryId)]} : {},
+      facetLogic: 'and',
+      sort: DEFAULT_BOOK_SORT_TERMS,
+      size: CANDIDATE_PAGE_SIZE + this.sourceBookIds.size,
+    };
+
+    const page = await this.queryClient.fetchQuery(this.bookQueryService.page(params));
+    return page.content
+      .map(bookSummaryToBook)
+      .filter(book => !this.sourceBookIds.has(book.id))
+      .slice(0, CANDIDATE_PAGE_SIZE);
   }
 
   onBookSelect(event: AutoCompleteSelectEvent): void {

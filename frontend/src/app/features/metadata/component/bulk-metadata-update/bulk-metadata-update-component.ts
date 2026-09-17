@@ -1,4 +1,4 @@
-import {Component, computed, effect, inject, Injector, OnInit} from '@angular/core';
+import {Component, computed, inject, OnInit} from '@angular/core';
 import {FormBuilder, FormGroup, FormsModule, ReactiveFormsModule} from '@angular/forms';
 
 import {InputText} from '@openng/optimus-ui/inputtext';
@@ -62,7 +62,6 @@ export class BulkMetadataUpdateComponent implements OnInit {
   private readonly bookService = inject(BookService);
   private readonly bookMetadataManageService = inject(BookMetadataManageService);
   private readonly messageService = inject(MessageService);
-  private readonly injector = inject(Injector);
   private readonly uniqueMetadata = computed(() => this.bookService.uniqueMetadata());
 
   get allAuthors(): string[] { return this.uniqueMetadata().authors; }
@@ -120,9 +119,8 @@ export class BulkMetadataUpdateComponent implements OnInit {
     );
   }
 
-  ngOnInit(): void {
+  async ngOnInit(): Promise<void> {
     this.bookIds = this.config.data?.bookIds ?? [];
-    this.books = this.bookService.getBooksByIds(this.bookIds);
 
     this.metadataForm = this.fb.group({
       authors: [],
@@ -136,9 +134,8 @@ export class BulkMetadataUpdateComponent implements OnInit {
       tags: []
     });
 
-    effect(() => {
-      this.books = this.bookService.books().filter(book => this.bookIds.includes(book.id));
-    }, {injector: this.injector});
+    // /books/batch fetches only the selection - never the full collection.
+    this.books = await this.bookService.getBooksByIds(this.bookIds);
   }
 
   onFieldClearToggle(field: keyof typeof this.clearFields): void {

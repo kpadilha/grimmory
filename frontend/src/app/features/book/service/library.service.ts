@@ -5,23 +5,31 @@ import {tap} from 'rxjs/operators';
 import {injectQuery, queryOptions, QueryClient} from '@tanstack/angular-query-experimental';
 
 import {Library} from '../model/library.model';
-import {BookService} from './book.service';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {AuthService} from '../../../shared/service/auth.service';
 import {BOOKS_QUERY_KEY} from './book-query-keys';
 import {LIBRARIES_QUERY_KEY, libraryFormatCountsQueryKey} from './library-query-keys';
+import {BookQueryService} from '../data/book-query.service';
+import {GLOBAL_FACET_PARAMS} from '../data/book-query-params';
+import {toFacetCountMap} from '../data/book-query.models';
 
 @Injectable({providedIn: 'root'})
 export class LibraryService {
   private readonly url = `${API_CONFIG.BASE_URL}/api/v1/libraries`;
   private http = inject(HttpClient);
-  private bookService = inject(BookService);
   private authService = inject(AuthService);
   private queryClient = inject(QueryClient);
+  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
 
   private librariesQuery = injectQuery(() => ({
     ...this.getLibrariesQueryOptions(),
+    enabled: !!this.token(),
+  }));
+
+  // Sidebar badge counts - server-side per-library facet counts, not the full collection.
+  private readonly globalFacetsQuery = injectQuery(() => ({
+    ...this.bookQueryService.facets(GLOBAL_FACET_PARAMS),
     enabled: !!this.token(),
   }));
 
@@ -121,16 +129,11 @@ export class LibraryService {
     return this.libraries().find(library => library.id === id);
   }
 
-  getBookCountValue(libraryId: number): number {
-    return this.bookService.books().filter(book => book.libraryId === libraryId).length;
-  }
-
   readonly bookCountByLibraryId = computed(() => {
+    const facetCounts = toFacetCountMap(this.globalFacetsQuery.data(), 'library');
     const counts = new Map<number, number>();
-    for (const book of this.bookService.books()) {
-      if (book.libraryId != null) {
-        counts.set(book.libraryId, (counts.get(book.libraryId) ?? 0) + 1);
-      }
+    for (const [libraryId, count] of facetCounts) {
+      counts.set(Number(libraryId), count);
     }
     return counts;
   });

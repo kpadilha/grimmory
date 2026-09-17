@@ -2,8 +2,12 @@ import {AfterViewInit, ChangeDetectionStrategy, Component, DestroyRef, ElementRe
 import {takeUntilDestroyed, toObservable, toSignal} from '@angular/core/rxjs-interop';
 import {ActivatedRoute} from '@angular/router';
 import {ConfirmationService, MenuItem, MessageService} from '@openng/optimus-ui/api';
+import {injectInfiniteQuery, injectQuery, keepPreviousData, QueryClient} from '@tanstack/angular-query-experimental';
 import {PageTitleService} from '../../../../shared/service/page-title.service';
 import {BookService} from '../../service/book.service';
+import {BookQueryService} from '../../data/book-query.service';
+import {bookSummaryToBook, flattenBookPages} from '../../data/book-query.models';
+import {EntityScopeFacet, isServerSortField, toAllBooksQueryParams, toSeriesCountMap} from './all-books-query.mapper';
 import {BookMetadataManageService} from '../../service/book-metadata-manage.service';
 import {debounceTime, distinctUntilChanged, filter, map, skip, take} from 'rxjs/operators';
 import {combineLatest, finalize} from 'rxjs';
@@ -54,11 +58,8 @@ import {AppSettingsService} from '../../../../shared/service/app-settings.servic
 import {MultiSortPopoverComponent} from './sorting/multi-sort-popover/multi-sort-popover.component';
 import {TranslocoDirective, TranslocoPipe, TranslocoService} from '@jsverse/transloco';
 
-import {SortService} from '../../service/sort.service';
 import {createVirtualGrid, type VirtualGridMetrics} from '../../../../shared/util/virtual-grid.util';
 import {GridDensityButtonsComponent, type GridDensityDirection} from '../../../../shared/components/grid-density-buttons/grid-density-buttons.component';
-import {filterBooksBySearchTerm} from './filters/HeaderFilter';
-import {filterBooksByFilters} from './filters/sidebar-filter';
 import {LayoutService} from '../../../../shared/layout/layout.service';
 import {createGridDensity} from '../../../../shared/util/grid-density.util';
 import {DeferredRenderState} from './deferred-render-state';
@@ -107,6 +108,8 @@ export class BookBrowserComponent implements AfterViewInit {
   private activatedRoute = inject(ActivatedRoute);
   private messageService = inject(MessageService);
   private bookService = inject(BookService);
+  private bookQueryService = inject(BookQueryService);
+  private queryClient = inject(QueryClient);
   private bookMetadataManageService = inject(BookMetadataManageService);
   private dialogHelperService = inject(BookDialogHelperService);
   private bookMenuService = inject(BookMenuService);
@@ -115,7 +118,6 @@ export class BookBrowserComponent implements AfterViewInit {
   private bookNavigationService = inject(BookNavigationService);
   private queryParamsService = inject(BookBrowserQueryParamsService);
   private entityService = inject(BookBrowserEntityService);
-  private sortService = inject(SortService);
   private localStorageService = inject(LocalStorageService);
   private scrollService = inject(RouteScrollPositionService);
   private layoutService = inject(LayoutService);
@@ -174,6 +176,7 @@ export class BookBrowserComponent implements AfterViewInit {
   readonly rawFilterParamFromUrl = signal<string | null>(null);
   private readonly seriesCollapsed = this.seriesCollapseFilter.seriesCollapsed;
   readonly selectedBooks = this.bookSelectionService.selectedBooks;
+  readonly selectAllLoading = signal(false);
   readonly selectedCount = this.bookSelectionService.selectedCount;
   readonly showFilter = this.sidebarFilterTogglePrefService.showFilter;
   private readonly currentUser$ = toObservable(this.userService.currentUser).pipe(filter(u => !!u));
@@ -204,10 +207,61 @@ export class BookBrowserComponent implements AfterViewInit {
     }
     return {type: 'shelf', entity: {...entity, id: entity.id}};
   });
+
+  // Every book-browser route is server-paginated - the library is too large to hold
+  // client-side, so search/sort/facet run server-side via BookQueryService. The entity scope
+  // (library/shelf/magic-shelf/unshelved) rides along as one more mandatory facet; all-books
+  // has none.
+  private readonly entityScopeFacet = computed<EntityScopeFacet | null>(() => {
+    const {entityId, entityType} = this.entityInfo();
+    switch (entityType) {
+      case EntityType.LIBRARY:
+        return Number.isNaN(entityId) ? null : {key: 'library', value: String(entityId)};
+      case EntityType.SHELF:
+        return Number.isNaN(entityId) ? null : {key: 'shelf', value: String(entityId)};
+      case EntityType.MAGIC_SHELF:
+        // Server-side magic shelf rule evaluation lives behind the 'shelf' facet's 'magic:' prefix.
+        return Number.isNaN(entityId) ? null : {key: 'shelf', value: `magic:${entityId}`};
+      case EntityType.UNSHELVED:
+        return {key: 'shelf_status', value: 'unshelved'};
+      default:
+        return null;
+    }
+  });
+  private readonly booksQueryParams = computed(() => toAllBooksQueryParams({
+    search: this.debouncedSearchTerm(),
+    filters: this.selectedFilter(),
+    filterMode: this.selectedFilterMode(),
+    sort: this.sortCriteria(),
+    scope: this.entityScopeFacet(),
+  }));
+  private readonly booksInfiniteQuery = injectInfiniteQuery(() => ({
+    ...this.bookQueryService.infinitePage(this.booksQueryParams()),
+    // Keeps the previous page's books on screen while a filter/sort/route change re-keys the query.
+    placeholderData: keepPreviousData,
+  }));
+  private readonly fetchedBooks = computed<Book[]>(() =>
+    flattenBookPages(this.booksInfiniteQuery.data()).map(bookSummaryToBook)
+  );
+  private readonly booksTotalElements = computed(() =>
+    this.booksInfiniteQuery.data()?.pages[0]?.page.totalElements
+  );
+
   // Deferred pipeline: heavy filter/sort runs in a setTimeout so the page chrome
   // and skeletons paint first, then real books replace them on the next task.
   private readonly forceExpandSeries = computed(() =>
     this.queryParamsService.shouldForceExpandSeries(this.queryParamMap())
+  );
+
+  // Collapsed series cards need the REAL per-series count, not the count among pages fetched
+  // so far (which grows as the user scrolls) - the 'series' facet already totals it server-side
+  // under the current filters/scope, so fetch it only when a collapsed card would actually show it.
+  private readonly seriesFacetQuery = injectQuery(() => ({
+    ...this.bookQueryService.facets(this.booksQueryParams()),
+    enabled: this.seriesCollapsed() && !this.forceExpandSeries(),
+  }));
+  private readonly seriesCounts = computed(() =>
+    toSeriesCountMap(this.seriesFacetQuery.data())
   );
   private readonly booksContextKey = computed(() => {
     const {entityId, entityType} = this.entityInfo();
@@ -219,39 +273,29 @@ export class BookBrowserComponent implements AfterViewInit {
   readonly hasRenderedBooks = this.booksRenderState.hasValue;
   readonly isBooksRefreshing = this.booksRenderState.isRefreshing;
 
-  private readonly computeBooksEffect = effect((onCleanup) => {
+  private readonly computeBooksEffect = effect(() => {
     const contextKey = this.booksContextKey();
-    const allBooks = this.bookService.books();
-    const {entityId, entityType} = this.entityInfo();
-    const searchTerm = this.debouncedSearchTerm();
-    const filters = this.selectedFilter();
-    const filterMode = this.selectedFilterMode();
     const collapsedFlag = this.seriesCollapsed();
     const forceExpand = this.forceExpandSeries();
-    const sortCriteria = this.sortCriteria();
 
     const sameContext = contextKey === this.lastBooksContextKey;
     const shouldRefresh = sameContext && untracked(() => this.hasRenderedBooks());
     const requestId = this.booksRenderState.begin(shouldRefresh ? 'refresh' : 'reset');
     this.lastBooksContextKey = contextKey;
 
-    const timeoutId = globalThis.setTimeout(() => {
-      const entityBooks = this.entityService.getBooksByEntity(allBooks, entityId, entityType);
-      const searched = filterBooksBySearchTerm(entityBooks, searchTerm);
-      const filtered = filterBooksByFilters(searched, filters, filterMode);
-      const collapsed = this.seriesCollapseFilter.collapseBooks(filtered, forceExpand, collapsedFlag);
-      const sorted = this.sortService.applyMultiSort(collapsed, sortCriteria);
-      this.booksRenderState.commit(requestId, sorted);
-    });
-
-    onCleanup(() => {
-      globalThis.clearTimeout(timeoutId);
-      this.booksRenderState.cancel(requestId);
-    });
+    // Server already applied search/sort/facet/scope; only the (cheap) series collapse runs here.
+    const fetched = this.fetchedBooks();
+    const seriesCounts = this.seriesCounts();
+    const collapsed = this.seriesCollapseFilter.collapseBooks(fetched, forceExpand, collapsedFlag, seriesCounts);
+    this.booksRenderState.commit(requestId, collapsed);
   });
 
-  readonly isBooksLoading = this.bookService.isBooksLoading;
-  readonly booksError = this.bookService.booksError;
+  readonly isBooksLoading = computed(() => this.booksInfiniteQuery.isPending());
+  readonly booksError = computed<string | null>(() => {
+    if (!this.booksInfiniteQuery.isError()) return null;
+    const error = this.booksInfiniteQuery.error();
+    return error instanceof Error ? error.message : 'Failed to load books';
+  });
 
   private readonly GRID_GAP = 21;
   private readonly CARD_ASPECT_RATIO = 7 / 5;
@@ -336,8 +380,9 @@ export class BookBrowserComponent implements AfterViewInit {
     }
 
     this.gridLastLoadRequestLoadedBookCount = loadedBookCount;
+    this.loadNextBooksPage();
   });
-  readonly isFetchingNextBooksPage = this.bookService.isBooksLoading;
+  readonly isFetchingNextBooksPage = computed(() => this.booksInfiniteQuery.isFetchingNextPage());
 
   parsedFilters: Record<string, string[]> = {};
   dynamicDialogRef: DynamicDialogRef | undefined | null;
@@ -486,6 +531,12 @@ export class BookBrowserComponent implements AfterViewInit {
     if (this.showBooksLoadingPlaceholder()) {
       return INITIAL_LOADING_ROW_COUNT;
     }
+    if (this.booksInfiniteQuery.hasNextPage()) {
+      // Series collapsing makes the eventual rendered total unpredictable; reserve one slot
+      // instead. Uncollapsed, the server's total gives the virtualizer its real final size.
+      const total = this.booksTotalElements();
+      return !this.seriesCollapsed() && total !== undefined ? total : renderedBookCount + 1;
+    }
     return renderedBookCount;
   }
 
@@ -630,7 +681,10 @@ export class BookBrowserComponent implements AfterViewInit {
 
       const visibleFields = currentUser.userSettings?.visibleSortFields ?? DEFAULT_VISIBLE_SORT_FIELDS;
       const sortOptionsByField = new Map(this.bookSorter.sortOptions.map(o => [o.field, o]));
-      this.visibleSortOptions.set(visibleFields.map(f => sortOptionsByField.get(f)).filter((o): o is SortOption => !!o));
+      const resolvedSortOptions = visibleFields.map(f => sortOptionsByField.get(f)).filter((o): o is SortOption => !!o);
+      // Every route sorts server-side now; only offer fields BookSortRegistry can actually
+      // apply, so a chosen sort is never silently ignored.
+      this.visibleSortOptions.set(resolvedSortOptions.filter(o => isServerSortField(o.field)));
 
       if (!this.areSortCriteriaEqual(this.bookSorter.selectedSortCriteria, parseResult.sortCriteria)) {
         this.bookSorter.setSortCriteria(parseResult.sortCriteria);
@@ -693,19 +747,22 @@ export class BookBrowserComponent implements AfterViewInit {
     this.bookSelectionService.handleBookSelection(book, selected);
   }
 
-  selectAllBooks(): void {
-    const {entityId, entityType} = this.entityInfo();
-    const entityBooks = this.entityService.getBooksByEntity(
-      this.bookService.books(), entityId, entityType
-    );
-    const searched = filterBooksBySearchTerm(entityBooks, this.debouncedSearchTerm());
-    const filtered = filterBooksByFilters(searched, this.selectedFilter(), this.selectedFilterMode());
-    this.bookSelectionService.selectAll(filtered.map(b => b.id));
+  async selectAllBooks(): Promise<void> {
+    if (this.selectAllLoading()) return;
+    this.selectAllLoading.set(true);
+    try {
+      // The current route/search/filter/sort scope, same as the page query - /books/ids
+      // returns just the matching ids instead of downloading the whole collection to select it.
+      const ids = await this.queryClient.fetchQuery(this.bookQueryService.ids(this.booksQueryParams()));
+      this.bookSelectionService.selectAll(ids);
+    } finally {
+      this.selectAllLoading.set(false);
+    }
   }
 
   loadNextBooksPage(): void {
-    // This function is temporarily a no-op while a long term plan is being considered.
-    return;
+    if (this.booksInfiniteQuery.isFetchingNextPage() || !this.booksInfiniteQuery.hasNextPage()) return;
+    void this.booksInfiniteQuery.fetchNextPage();
   }
 
   deselectAllBooks(): void {

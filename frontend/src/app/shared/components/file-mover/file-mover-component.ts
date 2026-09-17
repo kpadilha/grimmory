@@ -50,9 +50,13 @@ export class FileMoverComponent implements OnDestroy {
   private appSettingsService = inject(AppSettingsService);
   private destroy$ = new Subject<void>();
   private readonly appSettings = this.appSettingsService.appSettings;
+  // Read alongside settings/libraries so the effect recomputes once the async book batch
+  // below resolves - `books` itself is a plain array, not a signal, and can't trigger a rerun.
+  private readonly booksLoaded = signal(false);
   private readonly syncLibraryPatternsEffect = effect(() => {
     const settings = this.appSettings();
     const libraries = this.libraryService.libraries();
+    this.booksLoaded();
     if (!settings) {
       return;
     }
@@ -125,7 +129,11 @@ export class FileMoverComponent implements OnDestroy {
 
   constructor() {
     this.bookIds = new Set(this.config.data?.bookIds ?? []);
-    this.books = this.bookService.getBooksByIds([...this.bookIds]);
+    this.bookService.getBooksByIds([...this.bookIds]).then(books => {
+      this.books = books;
+      this.booksLoaded.set(true);
+      this.applyPattern();
+    });
   }
 
   ngOnDestroy(): void {

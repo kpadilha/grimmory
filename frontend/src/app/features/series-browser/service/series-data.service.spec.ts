@@ -1,10 +1,22 @@
 import {signal} from '@angular/core';
 import {TestBed} from '@angular/core/testing';
-import {afterEach, describe, expect, it} from 'vitest';
+import {HttpTestingController} from '@angular/common/http/testing';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 
+import {createAuthServiceStub, createQueryClientHarness, flushQueryAsync, flushSignalAndQueryEffects} from '../../../core/testing/query-testing';
+import {AuthService} from '../../../shared/service/auth.service';
 import {BookService} from '../../book/service/book.service';
 import {ReadStatus, type Book} from '../../book/model/book.model';
 import {SeriesDataService} from './series-data.service';
+
+function seriesDataServiceProviders(bookService: unknown) {
+  return [
+    ...createQueryClientHarness().providers,
+    SeriesDataService,
+    {provide: AuthService, useValue: createAuthServiceStub()},
+    {provide: BookService, useValue: bookService},
+  ];
+}
 
 function makeBook(partial: Partial<Book> & Pick<Book, 'id' | 'libraryId' | 'libraryName'>): Book {
   return {
@@ -54,10 +66,7 @@ describe('SeriesDataService', () => {
     ]);
 
     TestBed.configureTestingModule({
-      providers: [
-        SeriesDataService,
-        {provide: BookService, useValue: {books: books.asReadonly()}},
-      ],
+      providers: seriesDataServiceProviders({books: books.asReadonly()}),
     });
 
     const service = TestBed.inject(SeriesDataService);
@@ -135,10 +144,7 @@ describe('SeriesDataService', () => {
     ]);
 
     TestBed.configureTestingModule({
-      providers: [
-        SeriesDataService,
-        {provide: BookService, useValue: {books: books.asReadonly()}},
-      ],
+      providers: seriesDataServiceProviders({books: books.asReadonly()}),
     });
 
     const service = TestBed.inject(SeriesDataService);
@@ -152,5 +158,63 @@ describe('SeriesDataService', () => {
       'Partial': ReadStatus.PARTIALLY_READ,
       'Unread': ReadStatus.UNREAD,
     });
+  });
+
+  it('derives the sidebar series count from the series facet, never the full collection', async () => {
+    const bookService = {
+      books: vi.fn(() => {
+        throw new Error('sidebar series count must not fetch the full collection');
+      }),
+    };
+
+    TestBed.configureTestingModule({
+      providers: seriesDataServiceProviders(bookService),
+    });
+
+    const service = TestBed.inject(SeriesDataService);
+    const httpTestingController = TestBed.inject(HttpTestingController);
+    flushSignalAndQueryEffects();
+
+    const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets'));
+    request.flush({
+      facets: [{
+        metadata: {rel: 'facet', key: 'series', title: 'Series'},
+        links: [
+          {rel: ['facet'], href: '', type: 'application/json', value: 'Alpha', title: 'Alpha', properties: {numberOfItems: 2}},
+          {rel: ['facet'], href: '', type: 'application/json', value: 'Beta', title: 'Beta', properties: {numberOfItems: 1}},
+        ],
+      }],
+    });
+    await flushQueryAsync();
+
+    expect(service.totalSeriesCount()).toBe(2);
+    expect(bookService.books).not.toHaveBeenCalled();
+  });
+
+  it('reads the exact distinct count above the facet listing cap, not the capped link count', async () => {
+    const bookService = {books: vi.fn(() => [])};
+
+    TestBed.configureTestingModule({
+      providers: seriesDataServiceProviders(bookService),
+    });
+
+    const service = TestBed.inject(SeriesDataService);
+    const httpTestingController = TestBed.inject(HttpTestingController);
+    flushSignalAndQueryEffects();
+
+    const cappedLinks = Array.from({length: 100}, (_, i) => ({
+      rel: ['facet'], href: '', type: 'application/json', value: `Series${i}`, title: `Series${i}`, properties: {numberOfItems: 1},
+    }));
+    const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets'));
+    request.flush({
+      facets: [{
+        metadata: {rel: 'facet', key: 'series', title: 'Series'},
+        links: cappedLinks,
+        distinctCount: 23731,
+      }],
+    });
+    await flushQueryAsync();
+
+    expect(service.totalSeriesCount()).toBe(23731);
   });
 });

@@ -3,7 +3,7 @@ import {TestBed} from '@angular/core/testing';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {AuthService} from '../../../shared/service/auth.service';
-import {createAuthServiceStub, createQueryClientHarness, flushSignalAndQueryEffects} from '../../../core/testing/query-testing';
+import {createAuthServiceStub, createQueryClientHarness, flushQueryAsync, flushSignalAndQueryEffects} from '../../../core/testing/query-testing';
 import type {Library} from '../model/library.model';
 import {BookService} from './book.service';
 import {BOOKS_QUERY_KEY} from './book-query-keys';
@@ -18,6 +18,11 @@ function buildLibrary(overrides: Partial<Library> = {}): Library {
     paths: [{path: '/books'}],
     ...overrides,
   };
+}
+
+// Sidebar badge counts are eager (cheap, token-gated only) - every test picks up this request.
+function flushFacetsRequest(httpTestingController: HttpTestingController, facets: unknown[] = []): void {
+  httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets')).flush({facets});
 }
 
 describe('LibraryService', () => {
@@ -62,6 +67,7 @@ describe('LibraryService', () => {
 
   it('refreshes and patches library metadata endpoints while invalidating the library cache', () => {
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/libraries')).flush([]);
+    flushFacetsRequest(httpTestingController);
 
     service.refreshLibrary(9).subscribe();
     const refreshRequest = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/libraries/9/refresh'));
@@ -79,6 +85,7 @@ describe('LibraryService', () => {
 
   it('invalidates library and book caches after update and delete flows', () => {
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/libraries')).flush([]);
+    flushFacetsRequest(httpTestingController);
 
     service.updateLibrary(buildLibrary({name: 'Updated'}), 4).subscribe();
     const updateRequest = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/libraries/4'));
@@ -97,6 +104,7 @@ describe('LibraryService', () => {
 
   it('hydrates format counts through ensureQueryData', async () => {
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/libraries')).flush([]);
+    flushFacetsRequest(httpTestingController);
 
     const resultPromise = new Promise<Record<string, number>>((resolve, reject) => {
       service.getBookCountsByFormat(8).subscribe({next: resolve, error: reject});
@@ -108,22 +116,31 @@ describe('LibraryService', () => {
     request.flush({EPUB: 7, PDF: 2});
 
     await expect(resultPromise).resolves.toEqual({EPUB: 7, PDF: 2});
-
-    bookService.books.mockReturnValue([
-      {libraryId: 8, shelves: []},
-      {libraryId: 8, shelves: []},
-      {libraryId: 9, shelves: []},
-    ]);
-    expect(service.getBookCountValue(8)).toBe(2);
   });
 
   it('removes library queries when the auth token becomes null', () => {
     const removeQueriesSpy = vi.spyOn(queryClientHarness.queryClient, 'removeQueries').mockImplementation(() => undefined);
 
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/libraries')).flush([]);
+    flushFacetsRequest(httpTestingController);
     authService.token.set(null);
     flushSignalAndQueryEffects();
 
     expect(removeQueriesSpy).toHaveBeenCalledWith({queryKey: LIBRARIES_QUERY_KEY});
+  });
+
+  it('derives bookCountByLibraryId from the server-side library facet, never the full collection', async () => {
+    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/libraries')).flush([]);
+    flushFacetsRequest(httpTestingController, [{
+      metadata: {rel: 'facet', key: 'library', title: 'Library'},
+      links: [
+        {rel: ['facet'], href: '', type: 'application/json', value: '8', title: 'Main', properties: {numberOfItems: 2}},
+        {rel: ['facet'], href: '', type: 'application/json', value: '9', title: 'Archive', properties: {numberOfItems: 5}},
+      ],
+    }]);
+    await flushQueryAsync();
+
+    expect(service.bookCountByLibraryId()).toEqual(new Map([[8, 2], [9, 5]]));
+    expect(bookService.books).not.toHaveBeenCalled();
   });
 });

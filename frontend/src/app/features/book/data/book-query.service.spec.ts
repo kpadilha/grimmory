@@ -190,6 +190,34 @@ describe('BookQueryService', () => {
     expect(host.query.hasNextPage()).toBe(false);
   });
 
+  it('fetchAllPages drains every page imperatively, following next links to exhaustion', async () => {
+    const resultPromise = service.fetchAllPages(PARAMS, new AbortController().signal);
+
+    const firstRequest = http.expectOne(`${API_CONFIG.BASE_URL}/api/v1/books/page?facet_logic=or&query=dune&facet=genre:Science%20Fiction&sort=title&size=20`);
+    firstRequest.flush({
+      ...page([1]),
+      links: [
+        {rel: 'next', href: '/api/v1/books/page?facet=genre%3AScience%20Fiction&cursor=opaque', type: 'application/json'},
+      ],
+    });
+
+    const nextRequest = await vi.waitFor(() =>
+      http.expectOne(`${API_CONFIG.BASE_URL}/api/v1/books/page?facet=genre%3AScience%20Fiction&cursor=opaque`)
+    );
+    nextRequest.flush(page([2]));
+
+    await expect(resultPromise).resolves.toEqual(page([1, 2]).content);
+  });
+
+  it('fetchAllPages stops after one page when the backend emits no next link', async () => {
+    const resultPromise = service.fetchAllPages(PARAMS, new AbortController().signal);
+
+    http.expectOne(`${API_CONFIG.BASE_URL}/api/v1/books/page?facet_logic=or&query=dune&facet=genre:Science%20Fiction&sort=title&size=20`)
+      .flush(page([1]));
+
+    await expect(resultPromise).resolves.toEqual(page([1]).content);
+  });
+
   it('keys an infinite query by its normalized parameters alone so the cache is shared', () => {
     expect(service.infinitePage(PARAMS).queryKey).toEqual(service.infinitePage(PARAMS).queryKey);
   });

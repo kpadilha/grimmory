@@ -3,6 +3,7 @@ import {InfiniteData, QueryClient} from '@tanstack/angular-query-experimental';
 import {Book, BookMetadata} from '../model/book.model';
 import {AppBookSummary, AppPageResponse} from '../model/app-book.model';
 import {BOOKS_QUERY_KEY, bookDetailQueryPrefix, bookRecommendationsQueryPrefix} from './book-query-keys';
+import {bookQueryKeys} from '../data/book-query-keys';
 
 const APP_BOOKS_QUERY_PREFIX = ['app-books'] as const;
 const APP_FILTER_OPTIONS_QUERY_PREFIX = ['app-filter-options'] as const;
@@ -16,6 +17,9 @@ export function invalidateAppBooksQueries(queryClient: QueryClient): void {
 
 export function invalidateBooksQuery(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({queryKey: BOOKS_QUERY_KEY, exact: true});
+  // Paged/faceted browsing (BookQueryService) is a separate cache family from the legacy full list.
+  void queryClient.invalidateQueries({queryKey: bookQueryKeys.collections()});
+  void queryClient.invalidateQueries({queryKey: bookQueryKeys.idQueries()});
   invalidateAppBooksQueries(queryClient);
 }
 

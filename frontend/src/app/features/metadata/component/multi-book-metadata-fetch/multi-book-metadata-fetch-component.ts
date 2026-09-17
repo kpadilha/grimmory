@@ -46,25 +46,25 @@ export class MultiBookMetadataFetchComponent implements OnInit, OnChanges {
     });
   }
 
-  ngOnInit(): void {
-    this.applyContext(this.dialogData ?? this.dynamicDialogConfig.data ?? {});
+  async ngOnInit(): Promise<void> {
+    await this.applyContext(this.dialogData ?? this.dynamicDialogConfig.data ?? {});
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if ('dialogData' in changes) {
-      this.applyContext(changes['dialogData'].currentValue ?? {});
+      void this.applyContext(changes['dialogData'].currentValue ?? {});
     }
   }
 
-  private applyContext(context: {
+  private async applyContext(context: {
     libraryId?: number | null;
     bookIds?: number[];
     metadataRefreshType?: MetadataRefreshType;
-  }): void {
+  }): Promise<void> {
     this.bookIds = context.bookIds ?? [];
     this.libraryId = context.libraryId ?? null;
     this.metadataRefreshType = context.metadataRefreshType ?? MetadataRefreshType.BOOKS;
-    this.booksToShow = this.bookService.getBooksByIds(this.bookIds);
+    this.booksToShow = await this.bookService.getBooksByIds(this.bookIds);
   }
 
   get isLibraryRefresh(): boolean {

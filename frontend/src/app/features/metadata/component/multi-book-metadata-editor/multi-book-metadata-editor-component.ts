@@ -2,6 +2,7 @@ import {Component, computed, effect, inject, signal} from '@angular/core';
 import {Tab, TabList, TabPanel, TabPanels, Tabs} from '@openng/optimus-ui/tabs';
 import {DynamicDialogConfig, DynamicDialogRef} from '@openng/optimus-ui/dynamicdialog';
 import {BookService} from '../../../book/service/book.service';
+import {Book} from '../../../book/model/book.model';
 import {UserService} from '../../../settings/user-management/user.service';
 import {MetadataEditorComponent} from '../book-metadata-center/metadata-editor/metadata-editor.component';
 import {MetadataSearcherComponent} from '../book-metadata-center/metadata-searcher/metadata-searcher.component';
@@ -33,9 +34,9 @@ export class MultiBookMetadataEditorComponent {
   bookIds: number[] = this.config.data?.bookIds ?? [];
   loading = false;
 
-  filteredBooks = computed(() => this.bookService.books().filter(book =>
-    !!book.metadata && this.bookIds.includes(book.id)
-  ));
+  // /books/batch fetches only the requested selection - never the full collection.
+  private readonly selectedBooks = signal<Book[]>([]);
+  filteredBooks = computed(() => this.selectedBooks());
   private currentIndex = signal(0);
   private currentBookId = computed(() => this.filteredBooks()[this.currentIndex()]?.id ?? null);
   private bookDetailQuery = injectQuery(() => ({
@@ -48,6 +49,10 @@ export class MultiBookMetadataEditorComponent {
   admin = false;
 
   constructor() {
+    this.bookService.getBooksByIds(this.bookIds).then(books => {
+      this.selectedBooks.set(books.filter(book => !!book.metadata));
+    });
+
     effect(() => {
       const user = this.userService.currentUser();
       if (!user) return;

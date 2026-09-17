@@ -30,6 +30,9 @@ export interface BrowseFacetGroup {
   key: string;
   title: string;
   values: BrowseFacetValue[];
+  // Exact, uncapped distinct-value count for high-cardinality groups (e.g. series); undefined
+  // where the server did not compute it - values.length is then the only (capped) estimate.
+  distinctCount?: number;
 }
 
 export type BrowseFacetLogic = 'and' | 'or' | 'not';

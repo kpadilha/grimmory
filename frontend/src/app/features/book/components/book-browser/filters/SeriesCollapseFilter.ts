@@ -69,7 +69,14 @@ export class SeriesCollapseFilter {
     }
   }
 
-  collapseBooks(books: Book[], forceExpandSeries?: boolean, isSeriesCollapsed: boolean = this.seriesCollapsed()): Book[] {
+  // seriesCountOverride: real per-series totals (e.g. from a server facet) for callers whose
+  // `books` is only a partial, paginated slice - group.length would then undercount the series.
+  collapseBooks(
+    books: Book[],
+    forceExpandSeries?: boolean,
+    isSeriesCollapsed: boolean = this.seriesCollapsed(),
+    seriesCountOverride?: ReadonlyMap<string, number>,
+  ): Book[] {
     const shouldCollapse = forceExpandSeries ? false : isSeriesCollapsed;
     if (!shouldCollapse || books.length === 0) return books;
 
@@ -96,10 +103,12 @@ export class SeriesCollapseFilter {
         return aNum - bNum;
       });
       const firstBook = sortedGroup[0];
+      const seriesName = firstBook.metadata?.seriesName?.trim();
+      const overrideCount = seriesName ? seriesCountOverride?.get(seriesName) : undefined;
       collapsedBooks.push({
         ...firstBook,
         seriesBooks: group,
-        seriesCount: group.length
+        seriesCount: overrideCount ?? group.length
       });
     }
 

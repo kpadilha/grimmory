@@ -81,6 +81,8 @@ export class MetadataManagerComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // NOT migrated: merge/rename/delete need each value's full bookIds list, which no facet
+    // or /books/page combination gives - needs a bucketed {value -> bookIds} backend aggregate.
     this.extractMetadata(this.bookService.books());
   });
 

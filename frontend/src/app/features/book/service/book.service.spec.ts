@@ -49,6 +49,12 @@ async function flushBooksQuery(): Promise<void> {
   await flushQueryAsync();
 }
 
+// The sidebar/boot facet counts are eager (cheap, token-gated only) - every test that
+// authenticates picks up this request regardless of whether it cares about the counts.
+function flushFacetsRequest(httpTestingController: HttpTestingController): void {
+  httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets')).flush({facets: []});
+}
+
 describe('BookService', () => {
   let service: BookService;
   let httpTestingController: HttpTestingController;
@@ -121,8 +127,17 @@ describe('BookService', () => {
     vi.restoreAllMocks();
   });
 
-  it('eagerly fetches books and hydrates query-backed state, loading state, and unique metadata', async () => {
+  it('never requests the full collection at boot - only the cheap facet counts', () => {
     setup();
+
+    flushFacetsRequest(httpTestingController);
+    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
+    expect(service.isBooksLoading()).toBe(false);
+  });
+
+  it('fetches books only once something reads books(), then hydrates query-backed state, loading state, and unique metadata', async () => {
+    setup();
+    flushFacetsRequest(httpTestingController);
 
     const response = [
       buildBook(1, {
@@ -148,6 +163,10 @@ describe('BookService', () => {
     ];
 
     expect(service.books()).toEqual([]);
+    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
+
+    await flushBooksQuery();
+
     expect(service.isBooksLoading()).toBe(true);
     expect(service.booksError()).toBeNull();
 
@@ -159,7 +178,6 @@ describe('BookService', () => {
     expect(service.books()).toEqual(response);
     expect(service.findBookById(2)).toEqual(response[1]);
     expect(service.findBookById(999)).toBeUndefined();
-    expect(service.getBooksByIds([2, 999, 1])).toEqual(response);
     expect(service.uniqueMetadata()).toEqual({
       authors: ['Le Guin', 'Pratchett'],
       categories: ['Fantasy', 'Humor'],
@@ -172,7 +190,30 @@ describe('BookService', () => {
     expect(service.booksError()).toBeNull();
   });
 
-  it('gates loading on the auth token and starts the eager fetch once a token is available', async () => {
+  it('resolves a selection by id from /books/batch, never the full collection', async () => {
+    setup();
+    flushFacetsRequest(httpTestingController);
+
+    const promise = service.getBooksByIds([2, 999, 1]);
+    const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/batch'));
+    expect(request.request.method).toBe('GET');
+    expect(request.request.params.get('ids')).toBe('2,999,1');
+    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books') && !req.url.includes('/batch'));
+
+    const response = [buildBook(2), buildBook(1)];
+    request.flush(response);
+
+    await expect(promise).resolves.toEqual(response);
+  });
+
+  it('returns immediately without a request for an empty selection', async () => {
+    setup();
+    flushFacetsRequest(httpTestingController);
+
+    await expect(service.getBooksByIds([])).resolves.toEqual([]);
+  });
+
+  it('gates loading on both the auth token and demand, fetching once both are present', async () => {
     setup(null);
 
     expect(service.books()).toEqual([]);
@@ -180,8 +221,12 @@ describe('BookService', () => {
     expect(service.booksError()).toBeNull();
     httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
 
+    await flushBooksQuery();
+    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
+
     authService.token.set('token-123');
-    flushSignalAndQueryEffects();
+    await flushBooksQuery();
+    flushFacetsRequest(httpTestingController);
 
     const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books'));
     expect(service.isBooksLoading()).toBe(true);
@@ -195,6 +240,10 @@ describe('BookService', () => {
 
   it('surfaces query errors through booksError and clears the loading flag', async () => {
     setup();
+    flushFacetsRequest(httpTestingController);
+
+    service.books();
+    await flushBooksQuery();
 
     const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books'));
     request.flush({message: 'boom'}, {status: 500, statusText: 'Server Error'});
@@ -207,6 +256,7 @@ describe('BookService', () => {
 
   it('removes a shelf from the cached books query without disturbing other shelf assignments', async () => {
     setup();
+    flushFacetsRequest(httpTestingController);
 
     const targetShelf = buildShelf(10, {name: 'Favorites'});
     const untouchedShelf = buildShelf(11, {name: 'Archive'});
@@ -215,6 +265,8 @@ describe('BookService', () => {
       buildBook(2, {shelves: [targetShelf]}),
     ];
 
+    service.books();
+    await flushBooksQuery();
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books')).flush(initialBooks);
     await flushBooksQuery();
 
@@ -233,9 +285,12 @@ describe('BookService', () => {
 
   it('removes the books query cache when the auth token is cleared', async () => {
     setup();
+    flushFacetsRequest(httpTestingController);
 
     const removeQueriesSpy = vi.spyOn(queryClientHarness.queryClient, 'removeQueries');
 
+    service.books();
+    await flushBooksQuery();
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books')).flush([
       buildBook(1),
       buildBook(2),

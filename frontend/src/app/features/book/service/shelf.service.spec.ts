@@ -4,7 +4,6 @@ import {TestBed} from '@angular/core/testing';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {createAuthServiceStub, createQueryClientHarness, flushQueryAsync, flushSignalAndQueryEffects} from '../../../core/testing/query-testing';
-import type {Book} from '../model/book.model';
 import type {Shelf} from '../model/shelf.model';
 import {AuthService} from '../../../shared/service/auth.service';
 import {UserService} from '../../settings/user-management/user.service';
@@ -17,15 +16,6 @@ function buildShelf(overrides: Partial<Shelf> = {}): Shelf {
     name: 'Favorites',
     userId: 7,
     bookCount: 0,
-    ...overrides,
-  };
-}
-
-function buildBook(id: number, overrides: Partial<Book> = {}): Book {
-  return {
-    id,
-    libraryId: 1,
-    libraryName: 'Main Library',
     ...overrides,
   };
 }
@@ -85,6 +75,11 @@ describe('ShelfService', () => {
     await flushQueryAsync();
   }
 
+  // Sidebar badge counts are eager (cheap, token-gated only) - every test picks up this request.
+  function flushFacetsRequest(facets: unknown[] = []): void {
+    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets')).flush({facets});
+  }
+
   it('eagerly fetches shelves and hydrates the computed shelves signal', async () => {
     const response = [
       buildShelf({id: 1, name: 'Reading', userId: 7}),
@@ -94,6 +89,7 @@ describe('ShelfService', () => {
     const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/shelves'));
     expect(request.request.method).toBe('GET');
     request.flush(response);
+    flushFacetsRequest();
     await flushShelvesQueryResult();
 
     expect(service.shelves()).toEqual([
@@ -108,6 +104,7 @@ describe('ShelfService', () => {
       buildShelf({id: 1, name: 'Kobo', icon: 'pi pi-tablet'}),
       buildShelf({id: 2, name: 'Archive', icon: 'pi pi-folder'}),
     ]);
+    flushFacetsRequest();
     await flushShelvesQueryResult();
 
     expect(service.shelves()).toEqual([
@@ -120,6 +117,7 @@ describe('ShelfService', () => {
     const removeQueriesSpy = vi.spyOn(queryClientHarness.queryClient, 'removeQueries').mockImplementation(() => undefined);
 
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/shelves')).flush([]);
+    flushFacetsRequest();
 
     authService.token.set(null);
     flushSignalAndQueryEffects();
@@ -131,6 +129,7 @@ describe('ShelfService', () => {
     const invalidateQueriesSpy = vi.spyOn(queryClientHarness.queryClient, 'invalidateQueries').mockResolvedValue(undefined);
 
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/shelves')).flush([]);
+    flushFacetsRequest();
 
     service.reloadShelves();
 
@@ -154,58 +153,34 @@ describe('ShelfService', () => {
     expect(bookService.removeBooksFromShelf).toHaveBeenCalledWith(11);
   });
 
-  it('uses owner-aware shelf counts and falls back to persisted counts for non-owners', async () => {
+  it('derives bookCountByShelfId and unshelvedBookCount from server-side facets, never the full collection', async () => {
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/shelves')).flush([
       buildShelf({id: 1, userId: 7, bookCount: 99}),
       buildShelf({id: 2, userId: 10, bookCount: 6}),
     ]);
-    await flushShelvesQueryResult();
-
-    bookService.books.mockReturnValue([
-      buildBook(1, {shelves: [buildShelf({id: 1, name: 'Reading'})]}),
-      buildBook(2, {shelves: [buildShelf({id: 1, name: 'Reading'})]}),
-      buildBook(3, {shelves: [buildShelf({id: 2, name: 'Archive'})]}),
-    ]);
-
-    currentUser.set({id: 7});
-    expect(service.getBookCountValue(1)).toBe(2);
-
-    currentUser.set({id: 42});
-    expect(service.getBookCountValue(2)).toBe(6);
-    expect(service.getBookCountValue(999)).toBe(0);
-  });
-
-  it('builds shelf count maps with local counts for the owner and persisted counts for shared shelves', async () => {
-    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/shelves')).flush([
-      buildShelf({id: 1, userId: 7, bookCount: 99}),
-      buildShelf({id: 2, userId: 10, bookCount: 6}),
+    flushFacetsRequest([
+      {
+        metadata: {rel: 'facet', key: 'shelf', title: 'Shelf'},
+        links: [
+          {rel: ['facet'], href: '', type: 'application/json', value: '1', title: 'Reading', properties: {numberOfItems: 2}},
+          {rel: ['facet'], href: '', type: 'application/json', value: '2', title: 'Archive', properties: {numberOfItems: 6}},
+        ],
+      },
+      {
+        metadata: {rel: 'facet', key: 'shelf_status', title: 'Shelf Status'},
+        links: [
+          {rel: ['facet'], href: '', type: 'application/json', value: 'shelved', title: 'Shelved', properties: {numberOfItems: 8}},
+          {rel: ['facet'], href: '', type: 'application/json', value: 'unshelved', title: 'Unshelved', properties: {numberOfItems: 3}},
+        ],
+      },
     ]);
     await flushShelvesQueryResult();
-
-    bookService.books.mockReturnValue([
-      buildBook(1, {shelves: [buildShelf({id: 1, name: 'Reading'})]}),
-      buildBook(2, {shelves: [buildShelf({id: 1, name: 'Reading'})]}),
-      buildBook(3, {shelves: [buildShelf({id: 2, name: 'Archive'})]}),
-    ]);
-
-    currentUser.set({id: 7});
-    flushSignalAndQueryEffects();
 
     const counts = service.bookCountByShelfId();
 
     expect(counts.get(1)).toBe(2);
     expect(counts.get(2)).toBe(6);
-  });
-
-  it('counts unshelved books from the current book cache snapshot', () => {
-    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/shelves')).flush([]);
-
-    bookService.books.mockReturnValue([
-      buildBook(1, {shelves: [buildShelf({id: 1, name: 'Reading'})]}),
-      buildBook(2, {shelves: []}),
-      buildBook(3, {shelves: undefined}),
-    ]);
-
-    expect(service.getUnshelvedBookCountValue()).toBe(2);
+    expect(service.unshelvedBookCount()).toBe(3);
+    expect(bookService.books).not.toHaveBeenCalled();
   });
 });

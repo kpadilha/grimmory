@@ -1,12 +1,13 @@
-import {signal} from '@angular/core';
 import {TestBed} from '@angular/core/testing';
+import {HttpTestingController} from '@angular/common/http/testing';
 import {TranslocoService} from '@jsverse/transloco';
 import {MessageService} from '@openng/optimus-ui/api';
 import {ActivatedRoute, convertToParamMap, Router} from '@angular/router';
 import {Subject, of, throwError} from 'rxjs';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
-import {BookService} from '../../../book/service/book.service';
+import {createAuthServiceStub, createQueryClientHarness, flushQueryAsync} from '../../../../core/testing/query-testing';
+import {AuthService} from '../../../../shared/service/auth.service';
 import {BookCardOverlayPreferenceService} from '../../../book/components/book-browser/book-card-overlay-preference.service';
 import {CoverScalePreferenceService} from '../../../book/components/book-browser/cover-scale-preference.service';
 import {UserService} from '../../../settings/user-management/user.service';
@@ -24,6 +25,8 @@ describe('AuthorDetailComponent', () => {
   let setPageTitle: ReturnType<typeof vi.fn>;
   let translate: ReturnType<typeof vi.fn>;
   let messageService: Pick<MessageService, 'add'>;
+  let queryClientHarness: ReturnType<typeof createQueryClientHarness>;
+  let httpTestingController: HttpTestingController;
   let route: {
     snapshot: {
       paramMap: ReturnType<typeof convertToParamMap>;
@@ -66,9 +69,13 @@ describe('AuthorDetailComponent', () => {
         queryParamMap: convertToParamMap({}),
       },
     };
+    queryClientHarness = createQueryClientHarness();
+    queryClientHarness.queryClient.setDefaultOptions({queries: {retry: false}});
 
     TestBed.configureTestingModule({
       providers: [
+        ...queryClientHarness.providers,
+        {provide: AuthService, useValue: createAuthServiceStub()},
         {
           provide: ActivatedRoute,
           useValue: route,
@@ -84,12 +91,6 @@ describe('AuthorDetailComponent', () => {
             getAuthorPhotoUrl,
             patchAuthorInCache,
             quickMatchAuthor,
-          },
-        },
-        {
-          provide: BookService,
-          useValue: {
-            books: signal([]),
           },
         },
         {
@@ -126,9 +127,11 @@ describe('AuthorDetailComponent', () => {
         },
       ],
     });
+    httpTestingController = TestBed.inject(HttpTestingController);
   });
 
   afterEach(() => {
+    queryClientHarness?.queryClient.clear();
     TestBed.resetTestingModule();
     vi.restoreAllMocks();
   });
@@ -294,5 +297,23 @@ describe('AuthorDetailComponent', () => {
       summary: 'authorBrowser.toast.quickMatchFailedSummary',
       detail: 'authorBrowser.toast.quickMatchFailedDetail',
     });
+  });
+
+  it('fetches this author\'s books from the server, scoped by the author facet - never the full collection', async () => {
+    const component = createComponent();
+    component.onAuthorUpdated(baseAuthor);
+    TestBed.flushEffects();
+
+    const req = httpTestingController.expectOne(r => r.url.endsWith('/api/v1/books/page'));
+    expect(req.request.params.getAll('facet')).toEqual(['author:Ada Lovelace']);
+    req.flush({
+      content: [{id: 1, libraryId: 1, libraryName: 'Main', metadata: {bookId: 1, title: 'Book 1', authors: ['Ada Lovelace']}}],
+      page: {number: 0, size: 1, totalElements: 1, totalPages: 1, cursor: ''},
+      links: [],
+    });
+    await flushQueryAsync();
+
+    expect(component.authorBooks().map(book => book.id)).toEqual([1]);
+    httpTestingController.verify();
   });
 });

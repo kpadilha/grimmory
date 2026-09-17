@@ -1,35 +1,47 @@
-import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {beforeEach, afterEach, describe, expect, it, vi} from 'vitest';
 import {TestBed} from '@angular/core/testing';
+import {HttpTestingController} from '@angular/common/http/testing';
 import {FormArray} from '@angular/forms';
 import {MagicShelfComponent, Rule, RuleOperator} from './magic-shelf-component';
 import {TranslocoService} from '@jsverse/transloco';
 import {LibraryService} from '../../book/service/library.service';
 import {ShelfService} from '../../book/service/shelf.service';
-import {BookService} from '../../book/service/book.service';
 import {MagicShelfService} from '../service/magic-shelf.service';
 import {MessageService} from '@openng/optimus-ui/api';
 import {DynamicDialogConfig, DynamicDialogRef} from '@openng/optimus-ui/dynamicdialog';
 import {UserService} from '../../settings/user-management/user.service';
 import {IconPickerService} from '../../../shared/service/icon-picker.service';
 import {of} from 'rxjs';
+import {createAuthServiceStub, createQueryClientHarness, flushQueryAsync} from '../../../core/testing/query-testing';
+import {AuthService} from '../../../shared/service/auth.service';
 
 describe('MagicShelfComponent (Part 3)', () => {
   let component: MagicShelfComponent;
+  let queryClientHarness: ReturnType<typeof createQueryClientHarness>;
+  let httpTestingController: HttpTestingController;
 
   const mockTransloco = {
     translate: vi.fn((key: string) => key),
     selectTranslation: vi.fn(() => of({})),
     langChanges$: of('en'),
     getActiveLang: vi.fn(() => 'en'),
+    config: {reRenderOnLangChange: false},
+    // Backs the *transloco directive's scope resolution (private API) - a real fixture with
+    // flushed effects instantiates it even though these tests never assert on its output.
+    _loadDependencies: vi.fn(() => of({})),
   };
 
   beforeEach(() => {
+    queryClientHarness = createQueryClientHarness();
+    queryClientHarness.queryClient.setDefaultOptions({queries: {retry: false}});
+
     TestBed.configureTestingModule({
       providers: [
+        ...queryClientHarness.providers,
+        {provide: AuthService, useValue: createAuthServiceStub()},
         {provide: TranslocoService, useValue: mockTransloco},
         {provide: LibraryService, useValue: {getLibrariesFromState: vi.fn(() => [])}},
         {provide: ShelfService, useValue: {shelves$: of([])}},
-        {provide: BookService, useValue: {bookState$: of({loaded: false, books: []})}},
         {provide: MagicShelfService, useValue: {}},
         {provide: MessageService, useValue: {add: vi.fn()}},
         {provide: DynamicDialogRef, useValue: {close: vi.fn()}},
@@ -41,6 +53,12 @@ describe('MagicShelfComponent (Part 3)', () => {
 
     const fixture = TestBed.createComponent(MagicShelfComponent);
     component = fixture.componentInstance;
+    httpTestingController = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpTestingController?.match(() => true);
+    queryClientHarness?.queryClient.clear();
   });
 
   describe('getOperatorOptionsForField', () => {
@@ -768,6 +786,30 @@ describe('MagicShelfComponent (Part 3)', () => {
       };
       const result = component.buildGroupFromData(groupData);
       expect(result.get('join')?.value).toBe('or');
+    });
+  });
+
+  describe('categoryOptions', () => {
+    it('resolves distinct categories from the genre facet, sorted and never from the full collection', async () => {
+      TestBed.flushEffects();
+      const req = httpTestingController.expectOne(r => r.url.endsWith('/api/v1/books/facets'));
+      req.flush({
+        facets: [
+          {
+            metadata: {rel: 'genre', key: 'genre', title: 'Genre'},
+            links: [
+              {rel: ['genre'], href: '', type: '', title: 'Sci-Fi', value: 'Sci-Fi', properties: {numberOfItems: 3}},
+              {rel: ['genre'], href: '', type: '', title: 'Fantasy', value: 'Fantasy', properties: {numberOfItems: 5}},
+            ],
+          },
+        ],
+      });
+      await flushQueryAsync();
+
+      expect(component.categoryOptions()).toEqual([
+        {label: 'Fantasy', value: 'Fantasy'},
+        {label: 'Sci-Fi', value: 'Sci-Fi'},
+      ]);
     });
   });
 });

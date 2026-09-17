@@ -4,11 +4,14 @@ import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { Router } from '@angular/router';
 import { TranslocoService } from '@jsverse/transloco';
 import { debounceTime, distinctUntilChanged } from 'rxjs';
+import { injectQuery } from '@tanstack/angular-query-experimental';
 
 import { BookDialogHelperService } from '../book/components/book-browser/book-dialog-helper.service';
-import { filterBooksBySearchTerm, normalizeSearchTerm } from '../book/components/book-browser/filters/HeaderFilter';
+import { normalizeSearchTerm } from '../book/components/book-browser/filters/HeaderFilter';
 import { Book } from '../book/model/book.model';
-import { BookService } from '../book/service/book.service';
+import { BookQueryService } from '../book/data/book-query.service';
+import { BookPageParams, DEFAULT_BOOK_SORT_TERMS } from '../book/data/book-query-params';
+import { bookSummaryToBook } from '../book/data/book-query.models';
 import { LibraryService } from '../book/service/library.service';
 import { ShelfService } from '../book/service/shelf.service';
 import { MagicShelfService } from '../magic-shelf/service/magic-shelf.service';
@@ -43,7 +46,7 @@ export class CommandPaletteService {
   private readonly router = inject(Router);
   private readonly t = inject(TranslocoService);
   private readonly userService = inject(UserService);
-  private readonly bookService = inject(BookService);
+  private readonly bookQueryService = inject(BookQueryService);
   private readonly shelfService = inject(ShelfService);
   private readonly magicShelfService = inject(MagicShelfService);
   private readonly libraryService = inject(LibraryService);
@@ -68,15 +71,26 @@ export class CommandPaletteService {
     ),
     { initialValue: this.trimmedQuery() },
   );
+  // Server-side search, scoped to a small result page - the palette must never filter the
+  // full collection client-side to answer a search box.
+  private readonly bookSearchParams = computed<BookPageParams>(() => ({
+    query: this.debouncedBookQuery(),
+    facets: {},
+    facetLogic: 'and',
+    sort: DEFAULT_BOOK_SORT_TERMS,
+    size: BOOK_RESULT_LIMIT,
+  }));
+  private readonly bookSearchQuery = injectQuery(() => ({
+    ...this.bookQueryService.page(this.bookSearchParams()),
+    enabled: this.debouncedBookQuery().length >= MIN_BOOK_SEARCH_LENGTH,
+  }));
   private readonly localBookItems = computed<PaletteItem[]>(() => {
-    const query = this.debouncedBookQuery();
-    if (query.length < MIN_BOOK_SEARCH_LENGTH) {
+    if (this.debouncedBookQuery().length < MIN_BOOK_SEARCH_LENGTH) {
       return [];
     }
 
-    return filterBooksBySearchTerm(this.bookService.books(), query)
-      .slice(0, BOOK_RESULT_LIMIT)
-      .map((book) => this.toPaletteBookItem(book));
+    return (this.bookSearchQuery.data()?.content ?? [])
+      .map((summary) => this.toPaletteBookItem(bookSummaryToBook(summary)));
   });
 
   registerOverlayController(controller: CommandPaletteOverlayController): () => void {

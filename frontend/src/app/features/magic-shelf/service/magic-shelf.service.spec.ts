@@ -3,7 +3,6 @@ import {TestBed} from '@angular/core/testing';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {createAuthServiceStub, createQueryClientHarness, flushSignalAndQueryEffects, flushQueryAsync} from '../../../core/testing/query-testing';
-import type {Book} from '../../book/model/book.model';
 import {AuthService} from '../../../shared/service/auth.service';
 import type {GroupRule} from '../component/magic-shelf-component';
 import {BookService} from '../../book/service/book.service';
@@ -32,21 +31,22 @@ function buildGroupRule(overrides: Partial<GroupRule> = {}): GroupRule {
   };
 }
 
-function buildBook(id: number, overrides: Partial<Book> = {}): Book {
-  return {
-    id,
-    libraryId: 1,
-    libraryName: 'Main Library',
-    metadata: {
-      bookId: id,
-      title: `Book ${id}`,
-    },
-    ...overrides,
-  };
-}
-
 async function flushShelvesQuery(): Promise<void> {
   await flushQueryAsync();
+}
+
+// Each magic shelf badge is its own size-1 filtered page request (never the full collection) -
+// flush them all once the shelves are hydrated, reading the shelf id back off the facet param.
+function flushMagicShelfCountRequests(httpTestingController: HttpTestingController, counts: Record<number, number> = {}): void {
+  for (const req of httpTestingController.match(r => r.url.endsWith('/api/v1/books/page'))) {
+    const facetParam = req.request.params.getAll('facet') ?? [];
+    const magicId = Number(facetParam.find(f => f.startsWith('shelf:magic:'))?.split(':')[2]);
+    req.flush({
+      content: [],
+      page: {number: 0, size: 1, totalElements: counts[magicId] ?? 0, totalPages: 1, cursor: ''},
+      links: [],
+    });
+  }
 }
 
 describe('MagicShelfService', () => {
@@ -116,6 +116,7 @@ describe('MagicShelfService', () => {
     expect(request.request.method).toBe('GET');
     request.flush(shelves);
     await flushShelvesQuery();
+    flushMagicShelfCountRequests(httpTestingController);
 
     expect(service.shelves()).toEqual(shelves);
     expect(service.isShelvesLoading()).toBe(false);
@@ -129,6 +130,7 @@ describe('MagicShelfService', () => {
       buildMagicShelf({id: 7, name: 'Cached'}),
     ]);
     await flushShelvesQuery();
+    flushMagicShelfCountRequests(httpTestingController);
 
     authService.token.set(null);
     flushSignalAndQueryEffects();
@@ -195,55 +197,23 @@ describe('MagicShelfService', () => {
       archiveShelf,
     ]);
     await flushShelvesQuery();
+    flushMagicShelfCountRequests(httpTestingController);
 
     expect(service.findShelfById(2)).toEqual(archiveShelf);
     expect(service.findShelfById(999)).toBeUndefined();
   });
 
-  it('returns zero and logs when a shelf filter contains invalid JSON', async () => {
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-
+  it('derives sidebar badge counts from a small filtered page per magic shelf, not the full collection', async () => {
     httpTestingController.expectOne(req => req.url.endsWith('/api/magic-shelves')).flush([
-      buildMagicShelf({id: 1, filterJson: '{invalid-json'}),
+      buildMagicShelf({id: 1, name: 'Reading'}),
+      buildMagicShelf({id: 2, name: 'Finished'}),
     ]);
     await flushShelvesQuery();
+    flushMagicShelfCountRequests(httpTestingController, {1: 4, 2: 0});
+    await flushShelvesQuery();
 
-    expect(service.getBookCountValue(1)).toBe(0);
+    expect(service.bookCountByMagicShelfId()).toEqual(new Map([[1, 4], [2, 0]]));
     expect(bookService.books).not.toHaveBeenCalled();
     expect(ruleEvaluatorService.evaluateGroup).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('Invalid filter JSON', expect.any(SyntaxError));
-  });
-
-  it('counts matching books against the parsed shelf rule group', async () => {
-    const group = buildGroupRule({
-      rules: [
-        {
-          field: 'title',
-          operator: 'contains',
-          value: 'book',
-        },
-      ],
-    });
-    const books = [
-      buildBook(1),
-      buildBook(2),
-      buildBook(3),
-    ];
-
-    bookService.books.mockReturnValue(books);
-    ruleEvaluatorService.evaluateGroup.mockImplementation((book: Book, parsedGroup: GroupRule, allBooks: Book[]) =>
-      parsedGroup.name === group.name && allBooks === books && book.id !== 2
-    );
-
-    httpTestingController.expectOne(req => req.url.endsWith('/api/magic-shelves')).flush([
-      buildMagicShelf({id: 5, filterJson: JSON.stringify(group)}),
-    ]);
-    await flushShelvesQuery();
-
-    expect(service.getBookCountValue(5)).toBe(2);
-    expect(ruleEvaluatorService.evaluateGroup).toHaveBeenCalledTimes(3);
-    expect(ruleEvaluatorService.evaluateGroup).toHaveBeenNthCalledWith(1, books[0], group, books);
-    expect(ruleEvaluatorService.evaluateGroup).toHaveBeenNthCalledWith(2, books[1], group, books);
-    expect(ruleEvaluatorService.evaluateGroup).toHaveBeenNthCalledWith(3, books[2], group, books);
   });
 });

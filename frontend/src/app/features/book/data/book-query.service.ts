@@ -96,6 +96,25 @@ export class BookQueryService {
     });
   }
 
+  // Imperative full-scope fetch for one-off callers outside Angular Query's reactive graph
+  // (e.g. an ISBN-dedup pass). The caller must keep the facet narrow (e.g. one library) - this
+  // pages to exhaustion, so a wide-open scope defeats the point of avoiding the full collection.
+  async fetchAllPages(params: BookPageParams, signal: AbortSignal): Promise<BookSummary[]> {
+    const normalized = normalizeBookPageParams(params);
+    const all: BookSummary[] = [];
+    let page = await this.fetchPage(normalized, null, signal);
+    all.push(...page.content);
+
+    let next = findBrowsePageLink(page, 'next');
+    while (next) {
+      page = await this.fetchPage(normalized, next.href, signal);
+      all.push(...page.content);
+      next = findBrowsePageLink(page, 'next');
+    }
+
+    return all;
+  }
+
   detail(bookId: number, {withDescription}: BookDescriptionOptions) {
     return queryOptions({
       queryKey: bookQueryKeys.detail(bookId, withDescription),

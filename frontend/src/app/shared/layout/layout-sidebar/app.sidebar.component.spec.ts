@@ -87,7 +87,15 @@ describe('AppSidebarComponent', () => {
         { provide: LibraryService, useValue: { libraries: signal([]), bookCountByLibraryId: signal(new Map()) } },
         { provide: LibraryHealthService, useValue: { isUnhealthy: vi.fn(() => false) } },
         { provide: ShelfService, useValue: { shelves: signal([]), bookCountByShelfId: signal(new Map()), unshelvedBookCount: signal(0) } },
-        { provide: BookService, useValue: { books: signal([]) } },
+        {
+          provide: BookService,
+          useValue: {
+            books: vi.fn(() => {
+              throw new Error('sidebar must never fetch the full book collection');
+            }),
+            totalBookCount: signal(0),
+          },
+        },
         {
           provide: DialogLauncherService,
           useValue: {
@@ -106,7 +114,15 @@ describe('AppSidebarComponent', () => {
         { provide: LayoutService, useValue: layoutService },
         { provide: UserService, useValue: { currentUser } },
         { provide: MagicShelfService, useValue: { shelves: signal([]), bookCountByMagicShelfId: signal(new Map()) } },
-        { provide: SeriesDataService, useValue: { allSeries: signal([]) } },
+        {
+          provide: SeriesDataService,
+          useValue: {
+            allSeries: vi.fn(() => {
+              throw new Error('sidebar must never build series summaries from the full book collection');
+            }),
+            totalSeriesCount: signal(0),
+          },
+        },
         { provide: AuthorService, useValue: { allAuthors: signal([]) } },
         { provide: MessageService, useValue: { add: vi.fn() } },
         {
@@ -342,5 +358,17 @@ describe('AppSidebarComponent', () => {
     });
 
     expect(sidebar.shouldShowNotificationBadge()).toBe(false);
+  });
+
+  it('renders the home badge counts from server-side totals, never the full book collection', () => {
+    const bookService = TestBed.inject(BookService) as unknown as { totalBookCount: WritableSignal<number> };
+    const seriesDataService = TestBed.inject(SeriesDataService) as unknown as { totalSeriesCount: WritableSignal<number> };
+    bookService.totalBookCount.set(132000);
+    seriesDataService.totalSeriesCount.set(4200);
+
+    const homeSection = component.sections().find(section => section.id === 'home');
+
+    expect(homeSection?.items.find(item => item.id === 'allBooks')?.bookCount).toBe(132000);
+    expect(homeSection?.items.find(item => item.id === 'series')?.bookCount).toBe(4200);
   });
 });

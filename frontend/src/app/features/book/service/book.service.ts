@@ -1,4 +1,4 @@
-import {computed, effect, inject, Injectable} from '@angular/core';
+import {computed, effect, inject, Injectable, signal} from '@angular/core';
 import {first, from, lastValueFrom, Observable, throwError} from 'rxjs';
 import {HttpClient, HttpParams} from '@angular/common/http';
 import {catchError, map, tap} from 'rxjs/operators';
@@ -23,6 +23,9 @@ import {
   patchBooksInCache,
   removeBookQueries,
 } from './book-query-cache';
+import {BookQueryService} from '../data/book-query.service';
+import {GLOBAL_FACET_PARAMS} from '../data/book-query-params';
+import {toFacetTotalCount} from '../data/book-query.models';
 
 @Injectable({
   providedIn: 'root',
@@ -40,13 +43,36 @@ export class BookService {
   private queryClient = inject(QueryClient);
   private readonly t = inject(TranslocoService);
   private readonly token = this.authService.token;
+  private readonly bookQueryService = inject(BookQueryService);
+
+  // Off until a real consumer asks for the full collection - see books() below. A 132k-book
+  // library with ~100 columns must never be the payload that boots the app.
+  private readonly booksRequested = signal(false);
+  private booksRequestScheduled = false;
 
   private booksQuery = injectQuery(() => ({
     ...this.getBooksQueryOptions(),
+    enabled: !!this.token() && this.booksRequested(),
+  }));
+
+  // ponytail: demand is marked via queueMicrotask so this stays a pure read when called from
+  // inside a computed()/effect() - Angular forbids signal writes mid-derivation otherwise.
+  books = (): Book[] => {
+    if (!this.booksRequestScheduled && !this.booksRequested()) {
+      this.booksRequestScheduled = true;
+      queueMicrotask(() => this.booksRequested.set(true));
+    }
+    return this.booksQuery.data() ?? [];
+  };
+
+  // Sidebar badge counts and the boot-time "all books" total come from server-side facet
+  // counts, not the full collection - see books() above for why that fetch must stay lazy.
+  private readonly globalFacetsQuery = injectQuery(() => ({
+    ...this.bookQueryService.facets(GLOBAL_FACET_PARAMS),
     enabled: !!this.token(),
   }));
 
-  books = computed(() => this.booksQuery.data() ?? []);
+  readonly totalBookCount = computed(() => toFacetTotalCount(this.globalFacetsQuery.data(), 'shelf_status'));
 
   /** Pre-computed unique metadata values for autocomplete across the app. */
   readonly uniqueMetadata = computed(() => {
@@ -88,13 +114,15 @@ export class BookService {
     return error instanceof Error ? error.message : 'Failed to load books';
   });
 
-  isBooksLoading = computed(() => !!this.token() && this.booksQuery.isPending());
+  isBooksLoading = computed(() => !!this.token() && this.booksRequested() && this.booksQuery.isPending());
 
   constructor() {
     effect(() => {
       const token = this.token();
       if (token === null) {
         this.queryClient.removeQueries({queryKey: BOOKS_QUERY_KEY});
+        this.booksRequested.set(false);
+        this.booksRequestScheduled = false;
       }
     });
   }
@@ -161,10 +189,13 @@ export class BookService {
     return this.books().find(book => +book.id === +bookId);
   }
 
-  getBooksByIds(bookIds: number[]): Book[] {
-    if (bookIds.length === 0) return [];
-    const idSet = new Set(bookIds.map(id => +id));
-    return this.books().filter(book => idSet.has(+book.id));
+  // /books/batch fetches only the requested ids - a selection editor must never wait on the
+  // full collection just to resolve the few books it was opened with.
+  getBooksByIds(bookIds: number[]): Promise<Book[]> {
+    if (bookIds.length === 0) return Promise.resolve([]);
+    const ids = new Set(bookIds.map(id => +id));
+    const params = new HttpParams().set('ids', Array.from(ids).join(','));
+    return lastValueFrom(this.http.get<Book[]>(`${this.url}/batch`, {params}));
   }
 
   getBooksInSeries(bookId: number): Observable<Book[]> {

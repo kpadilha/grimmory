@@ -131,6 +131,15 @@ class BookFacetServiceTest {
         bookEntity.setMetadata(metadata);
     }
 
+    private void bookInSeries(String title, String seriesName) {
+        BookEntity bookEntity = BookEntity.builder()
+                .library(library).libraryPath(libraryPath).addedOn(Instant.now()).deleted(false).build();
+        em.persist(bookEntity);
+        BookMetadataEntity metadata = BookMetadataEntity.builder().book(bookEntity).title(title).seriesName(seriesName).build();
+        em.persist(metadata);
+        bookEntity.setMetadata(metadata);
+    }
+
     private CategoryEntity category(String name) {
         return categories.computeIfAbsent(name, n -> {
             CategoryEntity e = CategoryEntity.builder().name(n).build();
@@ -295,6 +304,81 @@ class BookFacetServiceTest {
 
         assertThat(group(response, "genre").links()).hasSize(100);
         assertThat(group(response, "author").links()).hasSize(100);
+    }
+
+    @Test
+    void seriesDistinctCountIsExactBeyondTheCap() {
+        for (int i = 0; i < 101; i++) {
+            bookInSeries("S" + i + "-1", "Series" + i);
+        }
+        em.flush();
+
+        FacetGroup series = group(facetService.getFacets(null, null, null), "series");
+
+        assertThat(series.links()).hasSize(100);
+        assertThat(series.distinctCount()).isEqualTo(101);
+    }
+
+    @Test
+    void nonDistinctCountFacetsLeaveDistinctCountNull() {
+        book("A", "Horror", "Alice");
+        em.flush();
+
+        FacetGroupsResponse response = facetService.getFacets(null, null, null);
+
+        assertThat(group(response, "genre").distinctCount()).isNull();
+        assertThat(group(response, "author").distinctCount()).isNull();
+    }
+
+    // Domain size (distinct libraries) is what the cap counts, not book count - only the admin
+    // view sees every library, so this proves 101 distinct values survive uncapped for that view.
+    @Test
+    void libraryFacetIsNeverCappedSoSidebarCountsStayComplete() {
+        BookLoreUser.UserPermissions adminPermissions = new BookLoreUser.UserPermissions();
+        adminPermissions.setAdmin(true);
+        when(authenticationService.getAuthenticatedUser()).thenReturn(
+                BookLoreUser.builder().id(userEntity.getId()).permissions(adminPermissions).build());
+
+        for (int i = 0; i < 101; i++) {
+            LibraryEntity lib = LibraryEntity.builder().name("Lib" + i).icon("book").watch(false)
+                    .formatPriority(List.of(BookFileType.EPUB)).build();
+            em.persist(lib);
+            LibraryPathEntity path = LibraryPathEntity.builder().library(lib).path("/p" + i).build();
+            em.persist(path);
+            BookEntity bookEntity = BookEntity.builder().library(lib).libraryPath(path).addedOn(Instant.now()).deleted(false).build();
+            em.persist(bookEntity);
+        }
+        em.flush();
+
+        FacetGroup libraryGroup = group(facetService.getFacets(null, null, null), "library");
+
+        assertThat(libraryGroup.links()).hasSize(101);
+    }
+
+    // A non-admin only ever sees their own assigned library, so the unbounded distinct count
+    // for a facet outside it must stay zero - proves the scoping isn't lost with the cap removed.
+    @Test
+    void distinctCountNeverCountsSeriesOutsideTheUsersAssignedLibrary() {
+        LibraryEntity otherLibrary = LibraryEntity.builder().name("Other").icon("book").watch(false)
+                .formatPriority(List.of(BookFileType.EPUB)).build();
+        em.persist(otherLibrary);
+        LibraryPathEntity otherPath = LibraryPathEntity.builder().library(otherLibrary).path("/other").build();
+        em.persist(otherPath);
+
+        BookEntity otherBook = BookEntity.builder()
+                .library(otherLibrary).libraryPath(otherPath).addedOn(Instant.now()).deleted(false).build();
+        em.persist(otherBook);
+        BookMetadataEntity otherMetadata = BookMetadataEntity.builder().book(otherBook).title("Hidden").seriesName("HiddenSeries").build();
+        em.persist(otherMetadata);
+        otherBook.setMetadata(otherMetadata);
+
+        bookInSeries("Visible", "VisibleSeries");
+        em.flush();
+
+        FacetGroup series = group(facetService.getFacets(null, null, null), "series");
+
+        assertThat(series.distinctCount()).isEqualTo(1);
+        assertThat(series.links()).extracting(FacetLink::value).containsExactly("VisibleSeries");
     }
 
     @Test

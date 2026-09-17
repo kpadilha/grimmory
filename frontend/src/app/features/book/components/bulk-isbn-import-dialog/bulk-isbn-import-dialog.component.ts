@@ -10,6 +10,7 @@ import {FileUpload, FileSelectEvent} from '@openng/optimus-ui/fileupload';
 import {BookService} from '../../service/book.service';
 import {BookMetadataService} from '../../service/book-metadata.service';
 import {LibraryService} from '../../service/library.service';
+import {BookQueryService} from '../../data/book-query.service';
 import {Library} from '../../model/library.model';
 import {BookMetadata, CreatePhysicalBookRequest} from '../../model/book.model';
 import {TranslocoDirective} from '@jsverse/transloco';
@@ -61,6 +62,7 @@ export class BulkIsbnImportDialogComponent {
   private dynamicDialogRef = inject(DynamicDialogRef);
   private dialogConfig = inject(DynamicDialogConfig);
   private bookService = inject(BookService);
+  private bookQueryService = inject(BookQueryService);
   private bookMetadataService = inject(BookMetadataService);
   private libraryService = inject(LibraryService);
 
@@ -113,14 +115,14 @@ export class BulkIsbnImportDialogComponent {
     const reader = new FileReader();
     reader.onload = () => {
       const content = reader.result as string;
-      this.parseContent(content, file.name);
+      void this.parseContent(content, file.name);
     };
     reader.readAsText(file, 'UTF-8');
   }
 
   parsePastedText(): void {
     if (!this.pasteText.trim()) return;
-    this.parseContent(this.pasteText, 'paste');
+    void this.parseContent(this.pasteText, 'paste');
   }
 
   clearParsed(): void {
@@ -223,7 +225,7 @@ export class BulkIsbnImportDialogComponent {
     return this.libraries.find(l => l.id === this.selectedLibraryId)?.name ?? '';
   }
 
-  private parseContent(content: string, source: string): void {
+  private async parseContent(content: string, source: string): Promise<void> {
     this.parseError.set('');
     this.skipped.set([]);
     this.duplicatesRemoved.set(0);
@@ -246,7 +248,7 @@ export class BulkIsbnImportDialogComponent {
       isbns = lines.map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('#'));
     }
 
-    const existingIsbns = this.getExistingIsbnsForLibrary();
+    const existingIsbns = await this.getExistingIsbnsForLibrary();
     const validEntries: IsbnEntry[] = [];
     const seen = new Set<string>();
 
@@ -320,13 +322,17 @@ export class BulkIsbnImportDialogComponent {
     return result;
   }
 
-  private getExistingIsbnsForLibrary(): Set<string> {
+  // Scoped to the target library via the 'library' facet, paging to exhaustion - never the
+  // cross-library full collection just to dedupe one library's ISBNs.
+  private async getExistingIsbnsForLibrary(): Promise<Set<string>> {
     const isbns = new Set<string>();
     if (!this.selectedLibraryId) return isbns;
 
-    const books = this.bookService.books();
+    const books = await this.bookQueryService.fetchAllPages(
+      {facets: {library: [String(this.selectedLibraryId)]}, facetLogic: 'and', sort: [], size: 100},
+      new AbortController().signal,
+    );
     for (const book of books) {
-      if (book.libraryId !== this.selectedLibraryId) continue;
       const isbn13 = book.metadata?.isbn13;
       const isbn10 = book.metadata?.isbn10;
       if (isbn13) isbns.add(isbn13.toUpperCase());

@@ -19,7 +19,9 @@ import {CheckboxChangeEvent, Checkbox} from "@openng/optimus-ui/checkbox";
 import {UserService} from "../../settings/user-management/user.service";
 import {IconDisplayComponent} from '../../../shared/components/icon-display/icon-display.component';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
-import {BookService} from '../../book/service/book.service';
+import {injectQuery} from '@tanstack/angular-query-experimental';
+import {BookQueryService} from '../../book/data/book-query.service';
+import {GLOBAL_FACET_PARAMS} from '../../book/data/book-query-params';
 import {ShelfService} from '../../book/service/shelf.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {Textarea} from '@openng/optimus-ui/textarea';
@@ -459,15 +461,14 @@ export class MagicShelfComponent implements OnInit {
       value: shelf.id!
     }))
   );
+  // Distinct category values from the server's 'genre' facet - never the full collection.
+  private readonly categoryFacetQuery = injectQuery(() => this.bookQueryService.facets(GLOBAL_FACET_PARAMS));
   categoryOptions = computed(() => {
-    const categoriesSet = new Set<string>();
-    this.bookService.books().forEach(book => {
-      book.metadata?.categories?.forEach(category => categoriesSet.add(category));
-    });
+    const genreGroup = this.categoryFacetQuery.data()?.find(group => group.key === 'genre');
 
-    return Array.from(categoriesSet).map(category => ({
-      label: category,
-      value: category
+    return (genreGroup?.values ?? []).map(({value}) => ({
+      label: value,
+      value,
     })).sort((a, b) => a.label.localeCompare(b.label));
   });
 
@@ -486,7 +487,7 @@ export class MagicShelfComponent implements OnInit {
 
   libraryService = inject(LibraryService);
   shelfService = inject(ShelfService);
-  bookService = inject(BookService);
+  bookQueryService = inject(BookQueryService);
   magicShelfService = inject(MagicShelfService);
   ref = inject(DynamicDialogRef);
   messageService = inject(MessageService);

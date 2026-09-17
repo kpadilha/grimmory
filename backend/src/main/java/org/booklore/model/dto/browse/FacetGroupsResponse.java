@@ -10,8 +10,10 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record FacetGroupsResponse(List<Link> links, List<FacetGroup> facets) {
 
+    // distinctCount is the exact, uncapped count of values for this group (unlike links.size(),
+    // which stops at the facet listing's MAX_VALUES cap) - null where it was not computed.
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record FacetGroup(Metadata metadata, List<FacetLink> links) {
+    public record FacetGroup(Metadata metadata, List<FacetLink> links, Long distinctCount) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

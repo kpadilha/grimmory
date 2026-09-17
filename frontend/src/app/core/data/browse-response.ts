@@ -27,6 +27,7 @@ interface RawFacetLink extends RawLink {
 interface RawFacetGroup {
   metadata: {rel: string; key: string; title: string};
   links: RawFacetLink[];
+  distinctCount?: number;
 }
 
 interface RawFacetResponse {
@@ -47,6 +48,7 @@ export function mapBrowseFacetGroups(response: RawFacetResponse): BrowseFacetGro
     key: group.metadata.key,
     title: group.metadata.title,
     values: group.links.map(mapBrowseFacetValue),
+    ...(group.distinctCount === undefined ? {} : {distinctCount: group.distinctCount}),
   }));
 }
 

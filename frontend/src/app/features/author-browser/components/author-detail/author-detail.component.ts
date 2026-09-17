@@ -1,4 +1,4 @@
-import { AfterViewChecked, Component, computed, ElementRef, inject, OnInit, signal, viewChild } from '@angular/core';
+import { AfterViewChecked, Component, computed, effect, ElementRef, inject, OnInit, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { NgClass } from '@angular/common';
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from '@openng/optimus-ui/tabs';
@@ -8,9 +8,12 @@ import { Tag } from '@openng/optimus-ui/tag';
 import { TranslocoDirective, TranslocoService } from '@jsverse/transloco';
 import { MessageService } from '@openng/optimus-ui/api';
 import { Tooltip } from '@openng/optimus-ui/tooltip';
+import { injectInfiniteQuery } from '@tanstack/angular-query-experimental';
 import { AuthorService } from '../../service/author.service';
 import { AuthorDetails } from '../../model/author.model';
-import { BookService } from '../../../book/service/book.service';
+import { BookQueryService } from '../../../book/data/book-query.service';
+import { BookPageParams } from '../../../book/data/book-query-params';
+import { bookSummaryToBook, flattenBookPages } from '../../../book/data/book-query.models';
 import { BookCardComponent } from '../../../book/components/book-browser/book-card/book-card.component';
 import { CoverScalePreferenceService } from '../../../book/components/book-browser/cover-scale-preference.service';
 import { BookCardOverlayPreferenceService } from '../../../book/components/book-browser/book-card-overlay-preference.service';
@@ -45,11 +48,14 @@ import { createVirtualGrid } from '../../../../shared/util/virtual-grid.util';
 export class AuthorDetailComponent implements OnInit, AfterViewChecked {
 
   private static readonly GRID_GAP = 21;
+  // Max page size the server allows (see application.yaml); an author past this needs more
+  // than one round trip, which drainAuthorBooksPagesEffect below handles.
+  private static readonly AUTHOR_BOOKS_PAGE_SIZE = 100;
 
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private authorService = inject(AuthorService);
-  private bookService = inject(BookService);
+  private bookQueryService = inject(BookQueryService);
   private messageService = inject(MessageService);
   protected coverScalePreferenceService = inject(CoverScalePreferenceService);
   protected bookCardOverlayPreferenceService = inject(BookCardOverlayPreferenceService);
@@ -69,16 +75,33 @@ export class AuthorDetailComponent implements OnInit, AfterViewChecked {
   quickMatching = false;
   private authorState = signal<AuthorDetails | null>(null);
   author = this.authorState.asReadonly();
-  authorBooks = computed(() => {
-    const authorName = this.author()?.name?.toLowerCase();
-    if (!authorName) {
-      return [];
-    }
 
-    return this.bookService.books().filter(book =>
-      book.metadata?.authors?.some(author => author.toLowerCase() === authorName)
-    );
+  // Server-scoped to this one author via the 'author' facet - never the full collection.
+  private readonly authorBooksQueryParams = computed<BookPageParams>(() => {
+    const authorName = this.author()?.name ?? '';
+    return {
+      facets: authorName ? {author: [authorName]} : {},
+      facetLogic: 'and',
+      sort: [{key: 'title', direction: 'asc'}],
+      size: AuthorDetailComponent.AUTHOR_BOOKS_PAGE_SIZE,
+    };
   });
+  private readonly authorBooksQuery = injectInfiniteQuery(() => ({
+    ...this.bookQueryService.infinitePage(this.authorBooksQueryParams()),
+    enabled: !!this.author()?.name,
+  }));
+  // The page renders every book by the author at once (virtualized, but not scroll-paged), so
+  // drain pages automatically - the 100-per-page cap (application.yaml) keeps this to a single
+  // request for the overwhelming majority of authors.
+  private readonly drainAuthorBooksPagesEffect = effect(() => {
+    if (this.authorBooksQuery.hasNextPage() && !this.authorBooksQuery.isFetchingNextPage()) {
+      void this.authorBooksQuery.fetchNextPage();
+    }
+  });
+
+  authorBooks = computed(() =>
+    flattenBookPages(this.authorBooksQuery.data()).map(bookSummaryToBook)
+  );
 
   get currentCardSize() {
     return this.coverScalePreferenceService.currentCardSize();
