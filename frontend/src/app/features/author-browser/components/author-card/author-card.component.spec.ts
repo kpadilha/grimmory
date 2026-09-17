@@ -22,6 +22,14 @@ describe('AuthorCardComponent', () => {
     asin: 'B00ADA',
     bookCount: 12,
     hasPhoto: true,
+    libraryNames: [],
+    categories: [],
+    seriesCount: 0,
+    latestAddedOn: null,
+    lastReadTime: null,
+    readCount: 0,
+    inProgressCount: 0,
+    avgPersonalRating: null,
   };
 
   const createComponent = (overrides?: {

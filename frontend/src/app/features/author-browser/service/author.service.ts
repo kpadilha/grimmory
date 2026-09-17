@@ -4,17 +4,21 @@ import {lastValueFrom, Observable} from 'rxjs';
 import {map} from 'rxjs/operators';
 import {SseClient} from 'ngx-sse-client';
 import {API_CONFIG} from '../../../core/config/api-config';
-import {AuthorSummary, AuthorDetails, AuthorSearchResult, AuthorMatchRequest, AuthorUpdateRequest, AuthorPhotoResult} from '../model/author.model';
+import {AuthorSummary, AuthorDetails, AuthorPageResponse, AuthorSearchResult, AuthorMatchRequest, AuthorUpdateRequest, AuthorPhotoResult} from '../model/author.model';
 import {Book} from '../../book/model/book.model';
 import {AuthService} from '../../../shared/service/auth.service';
 import {injectQuery, queryOptions, QueryClient} from '@tanstack/angular-query-experimental';
 import {AUTHORS_QUERY_KEY} from './author-query-keys';
 import {invalidateAuthorsQuery, patchAuthorInCache} from './author-query-cache';
+import {fetchAllAuthorPages} from './author-page-loader';
 
 @Injectable({
   providedIn: 'root'
 })
 export class AuthorService {
+
+  // Server-enforced ceiling is 5000 (AuthorController); this just keeps round-trips few.
+  private static readonly AUTHORS_PAGE_SIZE = 1000;
 
   private http = inject(HttpClient);
   private authService = inject(AuthService);
@@ -49,7 +53,12 @@ export class AuthorService {
   private getAuthorsQueryOptions() {
     return queryOptions({
       queryKey: AUTHORS_QUERY_KEY,
-      queryFn: () => lastValueFrom(this.http.get<AuthorSummary[]>(this.baseUrl))
+      queryFn: () => fetchAllAuthorPages(
+        (page, size) => lastValueFrom(this.http.get<AuthorPageResponse>(this.baseUrl, {
+          params: {page: page.toString(), size: size.toString()}
+        })),
+        AuthorService.AUTHORS_PAGE_SIZE
+      )
     });
   }
 

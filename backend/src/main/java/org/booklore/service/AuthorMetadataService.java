@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.booklore.exception.ApiError;
 import org.booklore.config.security.service.AuthenticationService;
 import org.booklore.model.dto.AuthorDetails;
+import org.booklore.model.dto.AuthorPage;
 import org.booklore.model.dto.AuthorSearchResult;
 import org.booklore.model.dto.AuthorSummary;
 import org.booklore.model.dto.BookLoreUser;
@@ -17,6 +18,7 @@ import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.enums.AuditAction;
 import org.booklore.model.enums.AuthorMetadataSource;
+import org.booklore.model.enums.ReadStatus;
 import org.booklore.repository.AuthorRepository;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.audit.AuditService;
@@ -25,6 +27,7 @@ import org.booklore.service.metadata.parser.AuthorParser;
 import org.booklore.util.FileService;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -36,7 +39,9 @@ import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -62,30 +67,135 @@ public class AuthorMetadataService {
     private final AuthenticationService authenticationService;
     private final AppSettingService appSettingService;
 
-    public List<AuthorSummary> getAllAuthors() {
+    public AuthorPage getAllAuthors(Pageable pageable) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
-        List<Object[]> results;
+        List<Object[]> rows;
+        long total;
         if (user.getPermissions().isAdmin()) {
-            results = authorRepository.findAllWithBookCount();
+            rows = authorRepository.findAllWithBookCount(pageable);
+            total = authorRepository.countAllAuthors();
         } else {
             Set<Long> libraryIds = user.getAssignedLibraries().stream()
                     .map(Library::getId)
                     .collect(Collectors.toSet());
-            results = authorRepository.findAllWithBookCountByLibraryIds(libraryIds);
+            rows = authorRepository.findAllWithBookCountByLibraryIds(libraryIds, pageable);
+            total = authorRepository.countAllAuthorsByLibraryIds(libraryIds);
         }
-        List<AuthorSummary> summaries = new ArrayList<>();
-        for (Object[] row : results) {
-            AuthorEntity author = (AuthorEntity) row[0];
-            long bookCount = (Long) row[1];
-            summaries.add(AuthorSummary.builder()
-                    .id(author.getId())
-                    .name(author.getName())
-                    .asin(author.getAsin())
-                    .bookCount((int) bookCount)
-                    .hasPhoto(Files.exists(Paths.get(fileService.getAuthorThumbnailFile(author.getId()))))
-                    .build());
+
+        Set<Long> authorIds = rows.stream()
+                .map(row -> ((AuthorEntity) row[0]).getId())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        // One readdir for the whole page instead of one Files.exists() per author.
+        Set<Long> authorIdsWithPhotos = fileService.listAuthorIdsWithPhotos();
+        PageEnrichment enrichment = loadPageEnrichment(authorIds, user.getId());
+
+        List<AuthorSummary> summaries = rows.stream()
+                .map(row -> toSummary((AuthorEntity) row[0], (Long) row[1], authorIdsWithPhotos, enrichment))
+                .toList();
+
+        return AuthorPage.builder().content(summaries).totalElements(total).build();
+    }
+
+    private AuthorSummary toSummary(AuthorEntity author, long bookCount, Set<Long> authorIdsWithPhotos, PageEnrichment enrichment) {
+        Long id = author.getId();
+        ProgressAggregate progress = enrichment.progressByAuthor.getOrDefault(id, ProgressAggregate.EMPTY);
+        return AuthorSummary.builder()
+                .id(id)
+                .name(author.getName())
+                .asin(author.getAsin())
+                .bookCount((int) bookCount)
+                .hasPhoto(authorIdsWithPhotos.contains(id))
+                .libraryNames(List.copyOf(enrichment.libraryNamesByAuthor.getOrDefault(id, Set.of())))
+                .categories(List.copyOf(enrichment.categoriesByAuthor.getOrDefault(id, Set.of())))
+                .seriesCount(enrichment.seriesByAuthor.getOrDefault(id, Set.of()).size())
+                .latestAddedOn(enrichment.latestAddedOnByAuthor.get(id))
+                .lastReadTime(progress.lastReadTime)
+                .readCount(progress.readCount)
+                .inProgressCount(progress.inProgressCount)
+                .avgPersonalRating(progress.averageRating())
+                .build();
+    }
+
+    // Bulk-fetches everything the frontend used to derive from bookService.books() - scoped to the
+    // current page's author IDs, so cost tracks page size, not the full author table.
+    private PageEnrichment loadPageEnrichment(Set<Long> authorIds, Long userId) {
+        if (authorIds.isEmpty()) {
+            return PageEnrichment.EMPTY;
         }
-        return summaries;
+
+        Map<Long, Set<String>> libraryNamesByAuthor = new HashMap<>();
+        for (AuthorRepository.AuthorLibraryRow row : authorRepository.findLibraryNamesForAuthors(authorIds)) {
+            if (row.getLibraryName() == null) {
+                continue;
+            }
+            libraryNamesByAuthor.computeIfAbsent(row.getAuthorId(), k -> new LinkedHashSet<>()).add(row.getLibraryName());
+        }
+
+        Map<Long, Set<String>> categoriesByAuthor = new HashMap<>();
+        for (AuthorRepository.AuthorCategoryRow row : authorRepository.findCategoriesForAuthors(authorIds)) {
+            categoriesByAuthor.computeIfAbsent(row.getAuthorId(), k -> new LinkedHashSet<>()).add(row.getCategoryName());
+        }
+
+        Map<Long, Set<String>> seriesByAuthor = new HashMap<>();
+        for (AuthorRepository.AuthorSeriesRow row : authorRepository.findSeriesNamesForAuthors(authorIds)) {
+            seriesByAuthor.computeIfAbsent(row.getAuthorId(), k -> new LinkedHashSet<>()).add(row.getSeriesName().toLowerCase());
+        }
+
+        Map<Long, Instant> latestAddedOnByAuthor = new HashMap<>();
+        for (AuthorRepository.AuthorAddedOnRow row : authorRepository.findAddedOnForAuthors(authorIds)) {
+            if (row.getAddedOn() == null) {
+                continue;
+            }
+            latestAddedOnByAuthor.merge(row.getAuthorId(), row.getAddedOn(), (a, b) -> a.isAfter(b) ? a : b);
+        }
+
+        Map<Long, ProgressAggregate> progressByAuthor = new HashMap<>();
+        for (AuthorRepository.AuthorProgressRow row : authorRepository.findProgressForAuthors(authorIds, userId)) {
+            progressByAuthor.computeIfAbsent(row.getAuthorId(), k -> new ProgressAggregate()).accumulate(row);
+        }
+
+        return new PageEnrichment(libraryNamesByAuthor, categoriesByAuthor, seriesByAuthor, latestAddedOnByAuthor, progressByAuthor);
+    }
+
+    private record PageEnrichment(
+            Map<Long, Set<String>> libraryNamesByAuthor,
+            Map<Long, Set<String>> categoriesByAuthor,
+            Map<Long, Set<String>> seriesByAuthor,
+            Map<Long, Instant> latestAddedOnByAuthor,
+            Map<Long, ProgressAggregate> progressByAuthor
+    ) {
+        static final PageEnrichment EMPTY = new PageEnrichment(Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+    }
+
+    private static final class ProgressAggregate {
+        static final ProgressAggregate EMPTY = new ProgressAggregate();
+
+        int readCount;
+        int inProgressCount;
+        int ratingSum;
+        int ratingCount;
+        Instant lastReadTime;
+
+        void accumulate(AuthorRepository.AuthorProgressRow row) {
+            ReadStatus status = row.getReadStatus();
+            if (status == ReadStatus.READ) {
+                readCount++;
+            } else if (status == ReadStatus.READING || status == ReadStatus.RE_READING) {
+                inProgressCount++;
+            }
+            if (row.getPersonalRating() != null) {
+                ratingSum += row.getPersonalRating();
+                ratingCount++;
+            }
+            Instant candidate = row.getLastReadTime();
+            if (candidate != null && (lastReadTime == null || candidate.isAfter(lastReadTime))) {
+                lastReadTime = candidate;
+            }
+        }
+
+        Double averageRating() {
+            return ratingCount > 0 ? (double) ratingSum / ratingCount : null;
+        }
     }
 
     public List<AuthorSearchResult> searchAuthorMetadata(String name, String region) {

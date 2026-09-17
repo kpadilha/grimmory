@@ -1,13 +1,28 @@
 import {describe, expect, it} from 'vitest';
 
+import {AuthorSummary} from '../model/author.model';
 import {AuthorSelectionService} from './author-selection.service';
+
+function makeAuthor(overrides: Partial<AuthorSummary> & Pick<AuthorSummary, 'id' | 'name' | 'bookCount' | 'hasPhoto'>): AuthorSummary {
+  return {
+    libraryNames: [],
+    categories: [],
+    seriesCount: 0,
+    latestAddedOn: null,
+    lastReadTime: null,
+    readCount: 0,
+    inProgressCount: 0,
+    avgPersonalRating: null,
+    ...overrides,
+  };
+}
 
 describe('AuthorSelectionService', () => {
   const authors = [
-    {id: 1, name: 'Ada', bookCount: 1, hasPhoto: false},
-    {id: 2, name: 'Bert', bookCount: 2, hasPhoto: true},
-    {id: 3, name: 'Cy', bookCount: 3, hasPhoto: false},
-    {id: 4, name: 'Dee', bookCount: 4, hasPhoto: true},
+    makeAuthor({id: 1, name: 'Ada', bookCount: 1, hasPhoto: false}),
+    makeAuthor({id: 2, name: 'Bert', bookCount: 2, hasPhoto: true}),
+    makeAuthor({id: 3, name: 'Cy', bookCount: 3, hasPhoto: false}),
+    makeAuthor({id: 4, name: 'Dee', bookCount: 4, hasPhoto: true}),
   ];
 
   it('selects and deselects authors and exposes the selected count', () => {

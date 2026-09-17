@@ -2,6 +2,7 @@ package org.booklore.controller;
 
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.AuthorDetails;
+import org.booklore.model.dto.AuthorPage;
 import org.booklore.model.dto.AuthorSearchResult;
 import org.booklore.model.dto.AuthorSummary;
 import org.booklore.model.dto.CoverImage;
@@ -15,6 +16,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -31,14 +35,22 @@ import java.util.List;
 @AllArgsConstructor
 public class AuthorController {
 
+    private static final int DEFAULT_AUTHOR_PAGE_SIZE = 500;
+    private static final int MAX_AUTHOR_PAGE_SIZE = 5000;
+
     private final AuthorService authorService;
     private final AuthorMetadataService authorMetadataService;
 
-    @Operation(summary = "Get all authors", description = "Retrieve all authors with book counts.")
+    @Operation(summary = "Get all authors", description = "Retrieve a page of authors with book counts.")
     @ApiResponse(responseCode = "200", description = "Authors returned successfully")
     @GetMapping
-    public ResponseEntity<List<AuthorSummary>> getAllAuthors() {
-        return ResponseEntity.ok(authorMetadataService.getAllAuthors());
+    public ResponseEntity<AuthorPage> getAllAuthors(
+            @PageableDefault(size = DEFAULT_AUTHOR_PAGE_SIZE) Pageable pageable) {
+        // The repository query carries its own ORDER BY a.name; dropping any requested Sort here
+        // avoids Spring Data appending a second, conflicting ORDER BY clause.
+        int size = Math.min(pageable.getPageSize(), MAX_AUTHOR_PAGE_SIZE);
+        Pageable safePageable = PageRequest.of(pageable.getPageNumber(), size);
+        return ResponseEntity.ok(authorMetadataService.getAllAuthors(safePageable));
     }
 
     @Operation(summary = "Find author by name", description = "Find an author by exact name (case-insensitive).")
