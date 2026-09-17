@@ -11,6 +11,7 @@ import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Expression;
 import jakarta.persistence.criteria.Join;
 import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Path;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 import lombok.RequiredArgsConstructor;
@@ -18,15 +19,18 @@ import org.booklore.browse.FacetLogic;
 import org.booklore.browse.Link;
 import org.booklore.browse.ParamsHash;
 import org.booklore.config.security.service.AuthenticationService;
+import org.booklore.exception.ApiError;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.browse.FacetGroupsResponse;
 import org.booklore.model.dto.browse.FacetGroupsResponse.FacetGroup;
 import org.booklore.model.dto.browse.FacetGroupsResponse.FacetLink;
 import org.booklore.model.dto.browse.FacetGroupsResponse.Metadata;
 import org.booklore.model.dto.browse.FacetGroupsResponse.Properties;
+import org.booklore.model.dto.browse.FacetValueBookIds;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.UserBookProgressEntity;
+import org.booklore.model.enums.ComicCreatorRole;
 import org.booklore.model.enums.ReadStatus;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
@@ -34,6 +38,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -62,18 +67,25 @@ public class BookFacetService {
             new FacetDef("publisher", "Publisher", (cb, root, userId) -> metadata(root).get("publisher")),
             new FacetDef("language", "Language", (cb, root, userId) -> metadata(root).get("language")),
             new FacetDef("narrator", "Narrator", (cb, root, userId) -> metadata(root).get("narrator")),
-            new FacetDef("file_type", "File Type", (cb, root, userId) -> root.join("bookFiles", JoinType.LEFT).get("bookType")),
+            // Physical books carry no bookFiles row, so file_type joins bookFiles and layers
+            // isPhysical on top - otherwise "PHYSICAL" never gets a facet value at all.
+            new FacetDef("file_type", "File Type", (cb, root, userId) -> {
+                Path<?> bookType = root.join("bookFiles", JoinType.LEFT).get("bookType");
+                return cb.<String>selectCase()
+                        .when(cb.isTrue(root.get("isPhysical")), "PHYSICAL")
+                        .otherwise(bookType.as(String.class));
+            }),
             new FacetDef("content_rating", "Content Rating", (cb, root, userId) -> metadata(root).get("contentRating")),
-            new FacetDef("amazon_rating", "Amazon Rating", (cb, root, userId) -> metadata(root).get("amazonRating")),
-            new FacetDef("goodreads_rating", "Goodreads Rating", (cb, root, userId) -> metadata(root).get("goodreadsRating")),
-            new FacetDef("hardcover_rating", "Hardcover Rating", (cb, root, userId) -> metadata(root).get("hardcoverRating")),
-            new FacetDef("ranobedb_rating", "RanobeDB Rating", (cb, root, userId) -> metadata(root).get("ranobedbRating")),
-            new FacetDef("lubimyczytac_rating", "Lubimyczytac Rating", (cb, root, userId) -> metadata(root).get("lubimyczytacRating")),
-            new FacetDef("audible_rating", "Audible Rating", (cb, root, userId) -> metadata(root).get("audibleRating")),
+            new FacetDef("amazon_rating", "Amazon Rating", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Double>get("amazonRating"), NumericFacetBuckets.RATING_5)),
+            new FacetDef("goodreads_rating", "Goodreads Rating", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Double>get("goodreadsRating"), NumericFacetBuckets.RATING_5)),
+            new FacetDef("hardcover_rating", "Hardcover Rating", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Double>get("hardcoverRating"), NumericFacetBuckets.RATING_5)),
+            new FacetDef("ranobedb_rating", "RanobeDB Rating", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Double>get("ranobedbRating"), NumericFacetBuckets.RATING_5)),
+            new FacetDef("lubimyczytac_rating", "Lubimyczytac Rating", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Double>get("lubimyczytacRating"), NumericFacetBuckets.RATING_5)),
+            new FacetDef("audible_rating", "Audible Rating", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Double>get("audibleRating"), NumericFacetBuckets.RATING_5)),
             new FacetDef("applebooks_rating", "Apple Books Rating", (cb, root, userId) -> metadata(root).get("applebooksRating")),
-            new FacetDef("age_rating", "Age Rating", (cb, root, userId) -> metadata(root).get("ageRating")),
-            new FacetDef("page_count", "Page Count", (cb, root, userId) -> metadata(root).get("pageCount")),
-            new FacetDef("match_score", "Match Score", (cb, root, userId) -> root.get("metadataMatchScore")),
+            new FacetDef("age_rating", "Age Rating", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Integer>get("ageRating"), NumericFacetBuckets.AGE_RATING)),
+            new FacetDef("page_count", "Page Count", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Integer>get("pageCount"), NumericFacetBuckets.PAGE_COUNT)),
+            new FacetDef("match_score", "Match Score", (cb, root, userId) -> bucketExpr(cb, root.<Float>get("metadataMatchScore"), NumericFacetBuckets.MATCH_SCORE)),
             new FacetDef("published_year", "Published Year", (cb, root, userId) ->
                     cb.function("YEAR", Integer.class, metadata(root).get("publishedDate"))),
             new FacetDef("library", "Library", (cb, root, userId) -> root.join("library").get("id")),
@@ -96,12 +108,26 @@ public class BookFacetService {
             new FacetDef("file_size", "File Size", (cb, root, userId) -> {
                 Join<BookEntity, BookFileEntity> files = root.join("bookFiles", JoinType.LEFT);
                 files.on(cb.isTrue(files.get("isBookFormat")));
-                return files.get("fileSizeKb");
+                return bucketExpr(cb, files.<Long>get("fileSizeKb"), NumericFacetBuckets.FILE_SIZE);
             }),
             new FacetDef("comic_character", "Comic Characters", (cb, root, userId) -> metadata(root).join("comicMetadata", JoinType.LEFT).join("characters", JoinType.LEFT).get("name")),
             new FacetDef("comic_team", "Comic Teams", (cb, root, userId) -> metadata(root).join("comicMetadata", JoinType.LEFT).join("teams", JoinType.LEFT).get("name")),
             new FacetDef("comic_location", "Comic Locations", (cb, root, userId) -> metadata(root).join("comicMetadata", JoinType.LEFT).join("locations", JoinType.LEFT).get("name")),
-            new FacetDef("comic_creator", "Comic Creators", (cb, root, userId) -> metadata(root).join("comicMetadata", JoinType.LEFT).join("creatorMappings", JoinType.LEFT).join("creator", JoinType.LEFT).get("name")));
+            // Grouped by name alone this loses penciller/inker/... - "name:role" matches the
+            // frontend's own composite key (and what AppBookSpecification.withComicCreators parses).
+            new FacetDef("comic_creator", "Comic Creators", (cb, root, userId) -> {
+                Join<?, ?> mapping = metadata(root).join("comicMetadata", JoinType.LEFT).join("creatorMappings", JoinType.LEFT);
+                Join<?, ?> creator = mapping.join("creator", JoinType.LEFT);
+                Expression<String> role = cb.<String>selectCase()
+                        .when(cb.equal(mapping.get("role"), ComicCreatorRole.PENCILLER), "penciller")
+                        .when(cb.equal(mapping.get("role"), ComicCreatorRole.INKER), "inker")
+                        .when(cb.equal(mapping.get("role"), ComicCreatorRole.COLORIST), "colorist")
+                        .when(cb.equal(mapping.get("role"), ComicCreatorRole.LETTERER), "letterer")
+                        .when(cb.equal(mapping.get("role"), ComicCreatorRole.COVER_ARTIST), "coverArtist")
+                        .when(cb.equal(mapping.get("role"), ComicCreatorRole.EDITOR), "editor")
+                        .otherwise(cb.nullLiteral(String.class));
+                return cb.concat(cb.concat(creator.<String>get("name"), cb.literal(":")), role);
+            }));
 
     private final AuthenticationService authenticationService;
     private final BookFilterSpecifications filterSpecifications;
@@ -142,6 +168,49 @@ public class BookFacetService {
     // Package-private: lets tests reset the shared singleton cache between runs.
     void clearCache() {
         cache.invalidateAll();
+    }
+
+    // Exhaustive value -> book id map per requested facet key, unlike getFacets() this is never
+    // capped at MAX_VALUES - metadata merge/rename/delete needs every affected book, not the top 100.
+    public Map<String, List<FacetValueBookIds>> getFacetValueBookIds(List<String> facetKeys) {
+        BookLoreUser user = authenticationService.getAuthenticatedUser();
+        Long userId = user.getId();
+        boolean isAdmin = user.getPermissions().isAdmin();
+        Set<Long> libraryIds = BookFilterSpecifications.libraryIds(user);
+
+        Map<String, List<FacetValueBookIds>> result = new LinkedHashMap<>();
+        for (String key : facetKeys) {
+            FacetDef def = FACETS.stream().filter(f -> f.key().equals(key)).findFirst()
+                    .orElseThrow(() -> ApiError.INVALID_FACET.createException("Unknown facet: " + key));
+            Specification<BookEntity> base = filterSpecifications.base(null, Map.of(), FacetLogic.AND, userId, isAdmin, libraryIds, key);
+            result.put(key, valueBookIds(def, base, userId));
+        }
+        return result;
+    }
+
+    private List<FacetValueBookIds> valueBookIds(FacetDef def, Specification<BookEntity> base, Long userId) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Tuple> cq = cb.createTupleQuery();
+        Root<BookEntity> root = cq.from(BookEntity.class);
+        Expression<?> value = def.value().apply(cb, root, userId);
+
+        List<Predicate> predicates = new ArrayList<>();
+        Predicate basePredicate = base.toPredicate(root, cq, cb);
+        if (basePredicate != null) {
+            predicates.add(basePredicate);
+        }
+        predicates.add(cb.isNotNull(value));
+
+        cq.multiselect(value.alias("value"), root.get("id").alias("bookId"));
+        cq.where(predicates.toArray(Predicate[]::new));
+        cq.orderBy(cb.asc(value));
+
+        Map<String, List<Long>> grouped = new LinkedHashMap<>();
+        for (Tuple tuple : entityManager.createQuery(cq).getResultList()) {
+            String key = String.valueOf(tuple.get("value"));
+            grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(((Number) tuple.get("bookId")).longValue());
+        }
+        return grouped.entrySet().stream().map(e -> new FacetValueBookIds(e.getKey(), e.getValue())).toList();
     }
 
     private List<FacetCount> count(FacetDef def, Specification<BookEntity> base, Long userId) {
@@ -228,6 +297,19 @@ public class BookFacetService {
 
     private static Join<?, ?> metadata(Root<BookEntity> root) {
         return root.join("metadata", JoinType.LEFT);
+    }
+
+    // Explicit min<=x<max (or x>=min for the open top bucket) per WHEN, so bucket order in the
+    // table never matters - unlike a cascading >= chain, reordering the list can't misbucket.
+    private static Expression<String> bucketExpr(CriteriaBuilder cb, Expression<? extends Number> field, List<NumericFacetBuckets.Bucket> buckets) {
+        CriteriaBuilder.Case<String> selectCase = cb.<String>selectCase();
+        for (NumericFacetBuckets.Bucket bucket : buckets) {
+            Predicate condition = Double.isInfinite(bucket.max())
+                    ? cb.ge(field, bucket.min())
+                    : cb.and(cb.ge(field, bucket.min()), cb.lt(field, bucket.max()));
+            selectCase = selectCase.when(condition, bucket.id());
+        }
+        return selectCase.otherwise(cb.nullLiteral(String.class));
     }
 
     private interface FacetValueSource {
