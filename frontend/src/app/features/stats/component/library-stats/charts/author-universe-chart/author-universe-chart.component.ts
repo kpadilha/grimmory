@@ -1,10 +1,10 @@
-import {Component, DestroyRef, effect, inject} from '@angular/core';
+import {Component, DestroyRef, inject} from '@angular/core';
+import {takeUntilDestroyed, toObservable} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
-import {BehaviorSubject, Observable} from 'rxjs';
+import {BehaviorSubject, catchError, EMPTY, Observable, switchMap} from 'rxjs';
 import {Chart, ChartConfiguration, ChartData, TooltipModel} from 'chart.js';
 import {LibraryFilterService} from '../../service/library-filter.service';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../../../book/model/book.model';
+import {LibraryStatsService} from '../../service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {AsyncPipe} from '@angular/common';
 import {StatsChartThemeService} from '../../../shared/stats-chart-theme.service';
@@ -16,9 +16,7 @@ interface AuthorStats {
   avgRating: number;
   readCount: number;
   completionRate: number;
-  categories: string[];
-  ratingSum: number;
-  ratingCount: number;
+  distinctCategories: number;
 }
 
 interface BubbleDataPoint {
@@ -47,18 +45,11 @@ const COMPLETION_COLORS = {
   styleUrls: ['./author-universe-chart.component.scss']
 })
 export class AuthorUniverseChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly t = inject(TranslocoService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly chartTheme = inject(StatsChartThemeService);
-  private readonly syncChartEffect = effect(() => {
-    if (this.bookService.isBooksLoading()) {
-      return;
-    }
-
-    this.calculateAndUpdateChart(this.bookService.books(), this.libraryFilterService.selectedLibrary());
-  });
 
   public readonly chartType = 'bubble' as const;
   public chartOptions: ChartConfiguration<'bubble'>['options'];
@@ -78,6 +69,41 @@ export class AuthorUniverseChartComponent {
     this.destroyRef.onDestroy(() => {
       document.getElementById('author-chart-tooltip')?.remove();
     });
+
+    toObservable(this.libraryFilterService.selectedLibrary)
+      .pipe(
+        switchMap(libraryId => this.libraryStatsService.authors(50, libraryId).pipe(catchError(() => EMPTY))),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe(stats => this.updateFromServerStats(stats));
+  }
+
+  private updateFromServerStats(serverStats: {author: string; bookCount: number; totalPages: number; avgRating: number | null; readCount: number; distinctCategories: number}[]): void {
+    // Single-book authors would clutter the bubble chart - the server returns the top 50 by
+    // count (which naturally favours multi-book authors already), this just drops any leftover.
+    const multiBookStats = serverStats.filter(s => s.bookCount >= 2);
+    if (multiBookStats.length === 0) {
+      this.chartDataSubject.next({labels: [], datasets: []});
+      this.totalAuthors = 0;
+      this.topAuthors = [];
+      this.insights = [];
+      return;
+    }
+
+    const authorStats: AuthorStats[] = multiBookStats.map(s => ({
+      name: s.author,
+      bookCount: s.bookCount,
+      totalPages: s.totalPages,
+      avgRating: s.avgRating ?? 0,
+      readCount: s.readCount,
+      completionRate: s.bookCount > 0 ? (s.readCount / s.bookCount) * 100 : 0,
+      distinctCategories: s.distinctCategories
+    }));
+
+    this.totalAuthors = authorStats.length;
+    this.topAuthors = authorStats.slice(0, 10);
+    this.insights = this.generateInsights(authorStats);
+    this.updateChartData(authorStats);
   }
 
   private initChartOptions(): void {
@@ -160,111 +186,6 @@ export class AuthorUniverseChartComponent {
         mode: 'nearest'
       }
     };
-  }
-
-  private calculateAndUpdateChart(books: Book[], selectedLibraryId: number | null): void {
-    if (books.length === 0) {
-      this.chartDataSubject.next({labels: [], datasets: []});
-      this.totalAuthors = 0;
-      this.topAuthors = [];
-      this.insights = [];
-      return;
-    }
-
-    const filteredBooks = this.filterBooksByLibrary(books, selectedLibraryId);
-    const authorStats = this.calculateAuthorStats(filteredBooks);
-
-    this.totalAuthors = authorStats.length;
-    this.topAuthors = authorStats.slice(0, 10);
-    this.insights = this.generateInsights(authorStats);
-    this.updateChartData(authorStats);
-  }
-
-  private filterBooksByLibrary(books: Book[], selectedLibraryId: number | null): Book[] {
-    return selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
-  }
-
-  private calculateAuthorStats(books: Book[]): AuthorStats[] {
-    // Single-pass aggregation - O(n) where n = books * avg_authors_per_book
-    const authorMap = new Map<string, AuthorStats>();
-    const categorySet = new Map<string, Set<string>>(); // Track unique categories per author
-
-    for (const book of books) {
-      const authors = book.metadata?.authors;
-      if (!authors || authors.length === 0) continue;
-
-      // Get book's rating once
-      const bookRating = book.personalRating ||
-        book.metadata?.goodreadsRating ||
-        book.metadata?.amazonRating ||
-        book.metadata?.hardcoverRating || 0;
-
-      const isRead = book.readStatus === ReadStatus.READ;
-      const pageCount = book.metadata?.pageCount || 0;
-      const bookCategories = book.metadata?.categories;
-
-      for (const authorName of authors) {
-        const normalizedName = authorName.trim();
-        if (!normalizedName) continue;
-
-        let stats = authorMap.get(normalizedName);
-        if (!stats) {
-          stats = {
-            name: normalizedName,
-            bookCount: 0,
-            totalPages: 0,
-            avgRating: 0,
-            readCount: 0,
-            completionRate: 0,
-            categories: [],
-            ratingSum: 0,
-            ratingCount: 0
-          };
-          authorMap.set(normalizedName, stats);
-          categorySet.set(normalizedName, new Set());
-        }
-
-        // Aggregate in single pass
-        stats.bookCount++;
-        stats.totalPages += pageCount;
-
-        if (isRead) {
-          stats.readCount++;
-        }
-
-        if (bookRating > 0) {
-          stats.ratingSum += bookRating;
-          stats.ratingCount++;
-        }
-
-        // Track unique categories using Set (O(1) lookup)
-        if (bookCategories) {
-          const catSet = categorySet.get(normalizedName)!;
-          for (const cat of bookCategories) {
-            catSet.add(cat);
-          }
-        }
-      }
-    }
-
-    // Finalize calculations and filter - only process authors with 2+ books
-    const results: AuthorStats[] = [];
-
-    for (const [name, stats] of authorMap) {
-      if (stats.bookCount < 2) continue; // Skip single-book authors early
-
-      stats.completionRate = (stats.readCount / stats.bookCount) * 100;
-      stats.avgRating = stats.ratingCount > 0 ? stats.ratingSum / stats.ratingCount : 0;
-      stats.categories = Array.from(categorySet.get(name) || []).slice(0, 5); // Limit to 5 categories
-
-      results.push(stats);
-    }
-
-    // Sort and limit to top 50 for rendering performance
-    results.sort((a, b) => b.bookCount - a.bookCount);
-    return results.slice(0, 50);
   }
 
   private updateChartData(authorStats: AuthorStats[]): void {
@@ -447,12 +368,12 @@ export class AuthorUniverseChartComponent {
     }
 
     // Most versatile - author appearing in most genres
-    const versatileAuthors = authorStats.filter(a => a.categories.length >= 3);
+    const versatileAuthors = authorStats.filter(a => a.distinctCategories >= 3);
     if (versatileAuthors.length > 0) {
       const mostVersatile = versatileAuthors.reduce((a, b) =>
-        a.categories.length > b.categories.length ? a : b
+        a.distinctCategories > b.distinctCategories ? a : b
       );
-      insights.push(this.t.translate('statsLibrary.authorUniverse.insightMostVersatile', {name: mostVersatile.name, count: mostVersatile.categories.length}));
+      insights.push(this.t.translate('statsLibrary.authorUniverse.insightMostVersatile', {name: mostVersatile.name, count: mostVersatile.distinctCategories}));
     }
 
     // Completely unread - authors with 0% completion but multiple books
@@ -528,8 +449,10 @@ export class AuthorUniverseChartComponent {
       ? `${stats.avgRating.toFixed(2)} \u2605`
       : this.t.translate('statsLibrary.authorUniverse.tooltipNoRatings');
 
-    const safeGenres = this.escapeHtml(stats.categories.slice(0, 3).join(', '));
-    const categoriesHtml = stats.categories.length > 0
+    // ponytail: the authors() endpoint returns a category count, not names - the tooltip shows
+    // "N genres" instead of the top-3 name list it used to build from full book records.
+    const safeGenres = this.escapeHtml(String(stats.distinctCategories));
+    const categoriesHtml = stats.distinctCategories > 0
       ? `<div style="color:${colors.textSecondary};font-size:12px;line-height:1.6">${this.t.translate('statsLibrary.authorUniverse.tooltipGenres', {genres: safeGenres})}</div>`
       : '';
 

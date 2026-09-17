@@ -1,5 +1,4 @@
 import {computed, inject, Injectable, signal} from '@angular/core';
-import {BookService} from '../../../../book/service/book.service';
 import {LibraryService} from '../../../../book/service/library.service';
 import {TranslocoService} from '@jsverse/transloco';
 
@@ -25,29 +24,14 @@ export class LibraryFilterService {
     this.selectedLibraryId.set(libraryId);
   }
 
-  private bookService = inject(BookService);
   private libraryService = inject(LibraryService);
   private t = inject(TranslocoService);
   readonly libraryOptions = computed(() => {
-    const books = this.bookService.books();
     const libraries = this.libraryService.libraries();
-
-    if (books.length === 0) {
-      return [{id: null, name: this.t.translate('statsLibrary.libraryFilter.allLibraries')}];
-    }
-
-    const libraryMap = new Map<number, string>();
-    books.forEach(book => {
-      if (!libraryMap.has(book.libraryId)) {
-        const library = libraries.find(lib => lib.id === book.libraryId);
-        const libraryName = library?.name || this.t.translate('statsLibrary.libraryFilter.libraryFallback', {id: book.libraryId}) as string;
-        libraryMap.set(book.libraryId, libraryName);
-      }
-    });
 
     const options: LibraryOption[] = [
       {id: null, name: this.t.translate('statsLibrary.libraryFilter.allLibraries')},
-      ...Array.from(libraryMap.entries()).map(([id, name]) => ({id, name}))
+      ...libraries.map(lib => ({id: lib.id ?? null, name: lib.name}))
     ];
 
     return options.sort((a, b) => {

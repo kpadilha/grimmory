@@ -1,9 +1,10 @@
 import {Component, computed, inject} from '@angular/core';
+import {toObservable, toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData} from 'chart.js';
+import {catchError, of, switchMap} from 'rxjs';
 import {LibraryFilterService} from '../../service/library-filter.service';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book} from '../../../../../book/model/book.model';
+import {LibraryStatsService} from '../../service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 interface PageRange {
@@ -39,20 +40,18 @@ const PAGE_RANGES: PageRange[] = [
   styleUrls: ['./page-count-chart.component.scss']
 })
 export class PageCountChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly t = inject(TranslocoService);
-  private readonly booksWithPageCount = computed(() => {
-    if (this.bookService.isBooksLoading()) {
-      return [];
-    }
-
-    const filteredBooks = this.filterBooksByLibrary(this.bookService.books(), this.libraryFilterService.selectedLibrary());
-    return filteredBooks.filter(b => b.metadata?.pageCount != null && b.metadata.pageCount > 0);
-  });
+  private readonly buckets = toSignal(
+    toObservable(this.libraryFilterService.selectedLibrary).pipe(
+      switchMap(libraryId => this.libraryStatsService.histogram('page_count', libraryId).pipe(catchError(() => of([]))))
+    ),
+    {initialValue: []}
+  );
 
   public readonly chartType = 'bar' as const;
-  public readonly totalBooks = computed(() => this.booksWithPageCount().length);
+  public readonly totalBooks = computed(() => this.buckets().reduce((sum, b) => sum + b.count, 0));
 
   public readonly chartOptions: ChartConfiguration<'bar'>['options'] = {
     responsive: true,
@@ -126,12 +125,11 @@ export class PageCountChartComponent {
   };
 
   public readonly chartData = computed<PageChartData>(() => {
-    const booksWithPageCount = this.booksWithPageCount();
-    if (booksWithPageCount.length === 0) {
+    if (this.totalBooks() === 0) {
       return {labels: [], datasets: []};
     }
 
-    const stats = this.calculatePageStats(booksWithPageCount);
+    const stats = this.calculatePageStats();
     const labels = stats.map(s => s.range);
     const data = stats.map(s => s.count);
     const colors = stats.map(s => s.color);
@@ -149,37 +147,12 @@ export class PageCountChartComponent {
     };
   });
 
-  private filterBooksByLibrary(books: Book[], selectedLibraryId: number | null): Book[] {
-    return selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
-  }
-
-  private calculatePageStats(books: Book[]): PageStats[] {
-    const rangeCounts = new Map<string, { count: number, color: string }>();
-
-    PAGE_RANGES.forEach(range => {
-      rangeCounts.set(range.label, {count: 0, color: range.color});
-    });
-
-    books.forEach(book => {
-      const pageCount = book.metadata!.pageCount!;
-      for (const range of PAGE_RANGES) {
-        if (pageCount >= range.min && pageCount <= range.max) {
-          const data = rangeCounts.get(range.label)!;
-          data.count++;
-          break;
-        }
-      }
-    });
-
-    return PAGE_RANGES.map(range => {
-      const data = rangeCounts.get(range.label)!;
-      return {
-        range: range.label,
-        count: data.count,
-        color: data.color
-      };
-    });
+  private calculatePageStats(): PageStats[] {
+    const byLabel = new Map(this.buckets().map(b => [b.range, b.count]));
+    return PAGE_RANGES.map(range => ({
+      range: range.label,
+      count: byLabel.get(range.label) ?? 0,
+      color: range.color
+    }));
   }
 }

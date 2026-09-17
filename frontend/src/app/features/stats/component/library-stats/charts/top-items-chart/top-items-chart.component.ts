@@ -1,12 +1,13 @@
-import {Component, effect, inject, Input, OnInit} from '@angular/core';
+import {Component, DestroyRef, inject, Input, OnInit} from '@angular/core';
+import {takeUntilDestroyed, toObservable} from '@angular/core/rxjs-interop';
 import {FormsModule} from '@angular/forms';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData, TooltipItem} from 'chart.js';
-import {BehaviorSubject, Observable} from 'rxjs';
+import {BehaviorSubject, catchError, EMPTY, Observable, switchMap} from 'rxjs';
 import {Select} from '@openng/optimus-ui/select';
 import {LibraryFilterService} from '../../service/library-filter.service';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../../../book/model/book.model';
+import {LibraryStatsService, type LibraryAggregateBucket} from '../../service/library-stats.service';
+import {ReadStatus} from '../../../../../book/model/book.model';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {NgClass, AsyncPipe} from '@angular/common';
 
@@ -34,6 +35,16 @@ const DATA_TYPE_DEFS: { key: string; value: DataType; icon: string; color: strin
   {key: 'tags', value: 'tags', icon: 'pi-bookmark', color: '#EAB308'},
   {key: 'moods', value: 'moods', icon: 'pi-heart', color: '#EA580C'}
 ];
+
+// The aggregate endpoint's field names are singular for publisher; every other DataType matches.
+const AGGREGATE_FIELD_BY_TYPE: Record<DataType, string> = {
+  authors: 'authors',
+  categories: 'categories',
+  series: 'series',
+  publishers: 'publisher',
+  tags: 'tags',
+  moods: 'moods'
+};
 
 const READ_STATUS_KEYS: Record<ReadStatus, string> = {
   [ReadStatus.READ]: 'read',
@@ -93,19 +104,17 @@ export class TopItemsChartComponent implements OnInit {
   public totalBooks = 0;
   public insights: { icon: string; label: string; value: string }[] = [];
 
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly t = inject(TranslocoService);
-  private readonly syncChartEffect = effect(() => {
-    if (this.bookService.isBooksLoading()) {
-      return;
-    }
-
-    this.loadAndProcessData(this.bookService.books(), this.libraryFilterService.selectedLibrary());
-  });
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly dataTypeSubject: BehaviorSubject<DataType>;
   private readonly chartDataSubject: BehaviorSubject<ItemChartData>;
   private lastCalculatedStats: ItemStats[] = [];
-  private allBooks: Book[] = [];
+  // ponytail: proxy denominator for the "top 5 coverage" insight - the true filtered-library book
+  // count would need a separate summary() call; occurrence totals inflate for multi-valued fields
+  // (authors/categories/tags/moods) where one book contributes more than once.
+  private allItemOccurrences = 0;
 
   constructor() {
     this.dataTypeOptions = DATA_TYPE_DEFS.map(def => ({
@@ -115,12 +124,24 @@ export class TopItemsChartComponent implements OnInit {
       color: def.color
     }));
     this.selectedDataType = this.dataTypeOptions[0];
+    this.dataTypeSubject = new BehaviorSubject<DataType>(this.selectedDataType.value);
     this.chartDataSubject = new BehaviorSubject<ItemChartData>({
       labels: [],
       datasets: []
     });
     this.chartData$ = this.chartDataSubject.asObservable();
     this.initChartOptions();
+
+    toObservable(this.libraryFilterService.selectedLibrary)
+      .pipe(
+        switchMap(libraryId => this.dataTypeSubject.pipe(
+          switchMap(dataType => this.libraryStatsService
+            .aggregate(AGGREGATE_FIELD_BY_TYPE[dataType], libraryId, 'read_status')
+            .pipe(catchError(() => EMPTY)))
+        )),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe(buckets => this.processData(buckets));
   }
 
   ngOnInit(): void {
@@ -129,13 +150,14 @@ export class TopItemsChartComponent implements OnInit {
       if (initialOption) {
         this.selectedDataType = initialOption;
         this.initChartOptions();
+        this.dataTypeSubject.next(initialOption.value);
       }
     }
   }
 
   onDataTypeChange(): void {
     this.initChartOptions();
-    this.processData();
+    this.dataTypeSubject.next(this.selectedDataType.value);
   }
 
   private initChartOptions(): void {
@@ -227,19 +249,9 @@ export class TopItemsChartComponent implements OnInit {
     };
   }
 
-  private loadAndProcessData(books: Book[], selectedLibraryId: number | null): void {
-    if (books.length === 0) {
-      this.allBooks = [];
-      this.updateChartData([]);
-      return;
-    }
-
-    this.allBooks = this.filterBooksByLibrary(books, selectedLibraryId);
-    this.processData();
-  }
-
-  private processData(): void {
-    const stats = this.calculateStats(this.allBooks);
+  private processData(buckets: LibraryAggregateBucket[]): void {
+    this.allItemOccurrences = buckets.reduce((sum, b) => sum + b.count, 0);
+    const stats = this.calculateStats(buckets);
     this.updateChartData(stats);
   }
 
@@ -315,9 +327,8 @@ export class TopItemsChartComponent implements OnInit {
     // 3. Top 5 concentration
     if (stats.length >= 5) {
       const top5Books = stats.slice(0, 5).reduce((sum, s) => sum + s.count, 0);
-      const totalAllBooks = this.allBooks.length;
-      if (totalAllBooks > 0) {
-        const concentration = Math.round((top5Books / totalAllBooks) * 100);
+      if (this.allItemOccurrences > 0) {
+        const concentration = Math.round((top5Books / this.allItemOccurrences) * 100);
         this.insights.push({
           icon: 'pi-chart-pie',
           label: this.t.translate('statsLibrary.topItems.insightTop5Coverage'),
@@ -337,41 +348,24 @@ export class TopItemsChartComponent implements OnInit {
     }
   }
 
-  private calculateStats(books: Book[]): ItemStats[] {
-    if (books.length === 0) {
-      return [];
-    }
-
-    const itemMap = new Map<string, { count: number; statusBreakdown: Record<ReadStatus, number> }>();
-    const dataType = this.selectedDataType.value;
-
-    for (const book of books) {
-      const items = this.getItemsFromBook(book, dataType);
-      const bookStatus = book.readStatus || ReadStatus.UNSET;
-
-      for (const item of items) {
-        if (item && item.trim()) {
-          const normalizedName = item.trim();
-          let entry = itemMap.get(normalizedName);
-
-          if (!entry) {
-            entry = {
-              count: 0,
-              statusBreakdown: this.createEmptyStatusBreakdown()
-            };
-            itemMap.set(normalizedName, entry);
-          }
-
-          entry.count++;
-          entry.statusBreakdown[bookStatus]++;
-        }
-      }
-    }
-
-    return Array.from(itemMap.entries())
-      .map(([name, data]) => ({name, count: data.count, statusBreakdown: data.statusBreakdown}))
+  private calculateStats(buckets: LibraryAggregateBucket[]): ItemStats[] {
+    return buckets
+      .map(bucket => ({
+        name: bucket.value,
+        count: bucket.count,
+        statusBreakdown: this.toStatusBreakdown(bucket.breakdown ?? [])
+      }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 15);
+  }
+
+  private toStatusBreakdown(breakdown: LibraryAggregateBucket[]): Record<ReadStatus, number> {
+    const empty = this.createEmptyStatusBreakdown();
+    for (const entry of breakdown) {
+      const status = Object.values(ReadStatus).includes(entry.value as ReadStatus) ? (entry.value as ReadStatus) : ReadStatus.UNSET;
+      empty[status] += entry.count;
+    }
+    return empty;
   }
 
   private createEmptyStatusBreakdown(): Record<ReadStatus, number> {
@@ -386,34 +380,6 @@ export class TopItemsChartComponent implements OnInit {
       [ReadStatus.ABANDONED]: 0,
       [ReadStatus.UNSET]: 0
     };
-  }
-
-  private getItemsFromBook(book: Book, dataType: DataType): string[] {
-    const metadata = book.metadata;
-    if (!metadata) return [];
-
-    switch (dataType) {
-      case 'authors':
-        return metadata.authors || [];
-      case 'categories':
-        return metadata.categories || [];
-      case 'publishers':
-        return metadata.publisher ? [metadata.publisher] : [];
-      case 'tags':
-        return metadata.tags || [];
-      case 'moods':
-        return metadata.moods || [];
-      case 'series':
-        return metadata.seriesName ? [metadata.seriesName] : [];
-      default:
-        return [];
-    }
-  }
-
-  private filterBooksByLibrary(books: Book[], selectedLibraryId: number | null): Book[] {
-    return selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
   }
 
   private formatTooltipLabel(context: TooltipItem<'bar'>): string {

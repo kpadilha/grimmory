@@ -1,6 +1,8 @@
 import {computed, inject, Injectable} from '@angular/core';
+import {toObservable, toSignal} from '@angular/core/rxjs-interop';
+import {catchError, of, switchMap} from 'rxjs';
 import {LibraryFilterService} from './library-filter.service';
-import {BookService} from '../../../../book/service/book.service';
+import {LibraryStatsService} from './library-stats.service';
 
 export interface BooksSummary {
   totalBooks: number;
@@ -10,52 +12,33 @@ export interface BooksSummary {
   totalPublishers: number;
 }
 
+const EMPTY_SUMMARY: BooksSummary = {totalBooks: 0, totalSizeKb: 0, totalAuthors: 0, totalSeries: 0, totalPublishers: 0};
+
 @Injectable({
   providedIn: 'root'
 })
 export class LibrariesSummaryService {
-  private bookService = inject(BookService);
+  private libraryStatsService = inject(LibraryStatsService);
   private libraryFilterService = inject(LibraryFilterService);
+
+  private readonly summarySignal = toSignal(
+    toObservable(this.libraryFilterService.selectedLibrary).pipe(
+      switchMap(libraryId => this.libraryStatsService.summary(libraryId).pipe(catchError(() => of(null))))
+    ),
+    {initialValue: null}
+  );
+
   readonly booksSummary = computed<BooksSummary>(() => {
-    const books = this.bookService.books();
-    const selectedLibraryId = this.libraryFilterService.selectedLibrary();
-
-    if (books.length === 0) {
-      return {totalBooks: 0, totalSizeKb: 0, totalAuthors: 0, totalSeries: 0, totalPublishers: 0};
+    const summary = this.summarySignal();
+    if (!summary) {
+      return EMPTY_SUMMARY;
     }
-
-    const filteredBooks = selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
-
-    const totalBooks = filteredBooks.length;
-    const totalSizeKb = filteredBooks.reduce((sum, book) => sum + (book.fileSizeKb ?? book.primaryFile?.fileSizeKb ?? 0), 0);
-
-    const authorSet = new Set<string>();
-    const seriesSet = new Set<string>();
-    const publisherSet = new Set<string>();
-
-    filteredBooks.forEach(book => {
-      if (Array.isArray(book.metadata?.authors)) {
-        book.metadata.authors.forEach(author => {
-          const name = author?.trim();
-          if (name) authorSet.add(name);
-        });
-      }
-
-      const seriesName = book.metadata?.seriesName?.trim();
-      if (seriesName) seriesSet.add(seriesName);
-
-      const publisher = book.metadata?.publisher?.trim();
-      if (publisher) publisherSet.add(publisher);
-    });
-
     return {
-      totalBooks,
-      totalSizeKb,
-      totalAuthors: authorSet.size,
-      totalSeries: seriesSet.size,
-      totalPublishers: publisherSet.size
+      totalBooks: summary.totalBooks,
+      totalSizeKb: summary.totalSizeKb,
+      totalAuthors: summary.distinctAuthors,
+      totalSeries: summary.distinctSeries,
+      totalPublishers: summary.distinctPublishers
     };
   });
   readonly formattedSize = computed(() => this.formatSizeKb(this.booksSummary().totalSizeKb));

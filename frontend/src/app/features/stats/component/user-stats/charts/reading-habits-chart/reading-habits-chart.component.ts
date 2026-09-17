@@ -1,9 +1,10 @@
 import {Component, computed, inject} from '@angular/core';
+import {toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData} from 'chart.js';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../../../book/model/book.model';
+import {catchError, forkJoin, map, of} from 'rxjs';
+import {LibraryStatsService, type LibraryAggregateBucket, type LibraryAuthorStat, type LibraryHistogramBucket, type LibrarySummary, type LibraryTimelineResponse} from '../../../library-stats/service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 interface ReadingHabitsProfile {
@@ -24,6 +25,21 @@ interface HabitInsight {
   color: string;
 }
 
+// Primitives combined to reconstruct the eight-habit profile without a per-book payload.
+interface HabitSignals {
+  summary: LibrarySummary;
+  categories: LibraryAggregateBucket[];
+  languages: LibraryAggregateBucket[];
+  readStatus: LibraryAggregateBucket[];
+  personalRating: LibraryAggregateBucket[];
+  progressPercent: LibraryAggregateBucket[];
+  pageCount: LibraryHistogramBucket[];
+  publishedYear: LibraryTimelineResponse;
+  finishedByMonth: LibraryTimelineResponse;
+  authors: LibraryAuthorStat[];
+  series: LibraryAggregateBucket[];
+}
+
 type ReadingHabitsChartData = ChartData<'radar', number[], string>;
 
 @Component({
@@ -34,14 +50,27 @@ type ReadingHabitsChartData = ChartData<'radar', number[], string>;
   styleUrls: ['./reading-habits-chart.component.scss']
 })
 export class ReadingHabitsChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly t = inject(TranslocoService);
+  private readonly signals = toSignal(
+    forkJoin({
+      summary: this.libraryStatsService.summary(null),
+      categories: this.libraryStatsService.aggregate('categories', null),
+      languages: this.libraryStatsService.aggregate('language', null),
+      readStatus: this.libraryStatsService.aggregate('read_status', null),
+      personalRating: this.libraryStatsService.aggregate('personal_rating', null),
+      progressPercent: this.libraryStatsService.aggregate('progress_percent', null),
+      pageCount: this.libraryStatsService.histogram('page_count', null),
+      publishedYear: this.libraryStatsService.timeline('published_date', 'year', null),
+      finishedByMonth: this.libraryStatsService.timeline('date_finished', 'month', null),
+      authors: this.libraryStatsService.authors(200, null),
+      series: this.libraryStatsService.aggregate('series', null)
+    }).pipe(map(s => s as HabitSignals), catchError(() => of(null))),
+    {initialValue: null}
+  );
   private readonly profile = computed(() => {
-    if (this.bookService.isBooksLoading()) {
-      return null;
-    }
-
-    return this.calculateReadingHabitsData(this.bookService.books());
+    const signals = this.signals();
+    return signals && signals.summary.totalBooks > 0 ? this.analyzeReadingHabits(signals) : null;
   });
 
   private readonly habitKeys = ['consistency', 'multitasking', 'completionism', 'exploration', 'organization', 'intensity', 'methodology', 'momentum'];
@@ -179,276 +208,144 @@ export class ReadingHabitsChartComponent {
     return profile ? this.buildHabitInsights(profile) : [];
   });
 
-  private calculateReadingHabitsData(books: Book[]): ReadingHabitsProfile | null {
-    if (books.length === 0) {
-      return null;
-    }
-
-    return this.analyzeReadingHabits(books);
-  }
-
-  private analyzeReadingHabits(books: Book[]): ReadingHabitsProfile | null {
-    if (books.length === 0) {
-      return null;
-    }
-
+  private analyzeReadingHabits(s: HabitSignals): ReadingHabitsProfile {
     return {
-      consistency: this.calculateConsistencyScore(books),
-      multitasking: this.calculateMultitaskingScore(books),
-      completionism: this.calculateCompletionismScore(books),
-      exploration: this.calculateExplorationScore(books),
-      organization: this.calculateOrganizationScore(books),
-      intensity: this.calculateIntensityScore(books),
-      methodology: this.calculateMethodologyScore(books),
-      momentum: this.calculateMomentumScore(books)
+      consistency: this.calculateConsistencyScore(s),
+      multitasking: this.calculateMultitaskingScore(s),
+      completionism: this.calculateCompletionismScore(s),
+      exploration: this.calculateExplorationScore(s),
+      organization: this.calculateOrganizationScore(s),
+      intensity: this.calculateIntensityScore(s),
+      methodology: this.calculateMethodologyScore(s),
+      momentum: this.calculateMomentumScore(s)
     };
   }
 
-  // Regularity of reading over time (coefficient of variation of gaps between completions)
-  private calculateConsistencyScore(books: Book[]): number {
-    const completedBooks = books
-      .filter(book => book.readStatus === ReadStatus.READ && book.dateFinished)
-      .sort((a, b) => new Date(a.dateFinished!).getTime() - new Date(b.dateFinished!).getTime());
+  private statusCount(readStatus: LibraryAggregateBucket[], ...statuses: string[]): number {
+    return readStatus.filter(b => statuses.includes(b.value)).reduce((sum, b) => sum + b.count, 0);
+  }
 
-    if (completedBooks.length < 3) {
-      return Math.min(20, completedBooks.length * 10);
+  // ponytail: regularity from the coefficient of variation across MONTHLY finish counts, not
+  // exact per-book gap days - the timeline primitive only exposes monthly granularity.
+  private calculateConsistencyScore(s: HabitSignals): number {
+    const counts = s.finishedByMonth.buckets.map(b => b.count).filter(c => c > 0);
+    const completedCount = this.statusCount(s.readStatus, 'READ');
+    if (counts.length < 3) {
+      return Math.min(20, completedCount * 10);
     }
 
-    const dates = completedBooks.map(b => new Date(b.dateFinished!).getTime());
-    const gaps: number[] = [];
-    for (let i = 1; i < dates.length; i++) {
-      gaps.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
-    }
-
-    const meanGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-    if (meanGap === 0) return 50; // all finished same day — likely bulk import
-
-    const variance = gaps.reduce((sum, g) => sum + Math.pow(g - meanGap, 2), 0) / gaps.length;
-    const stdDev = Math.sqrt(variance);
-    const cv = stdDev / meanGap; // coefficient of variation: < 0.5 = very regular, > 2 = very irregular
+    const meanCount = counts.reduce((a, b) => a + b, 0) / counts.length;
+    if (meanCount === 0) return 50;
+    const variance = counts.reduce((sum, c) => sum + Math.pow(c - meanCount, 2), 0) / counts.length;
+    const cv = Math.sqrt(variance) / meanCount;
 
     const regularityScore = Math.max(0, Math.min(70, (1 - cv / 2) * 70));
-    const volumeBonus = Math.min(30, completedBooks.length * 1.5);
-
+    const volumeBonus = Math.min(30, completedCount * 1.5);
     return Math.min(100, Math.round(regularityScore + volumeBonus));
   }
 
-  // How many books are being read simultaneously
-  private calculateMultitaskingScore(books: Book[]): number {
-    const activeBooks = books.filter(book =>
-      book.readStatus === ReadStatus.READING || book.readStatus === ReadStatus.RE_READING
-    ).length;
-
-    // 1 active = 10, 2 = 30, 3 = 50, 4 = 65, 5+ = 75+
+  // ponytail: "partial-progress, not currently reading" needs a progress x read-status crosstab
+  // that isn't allow-listed - the partial component here is the progress band alone.
+  private calculateMultitaskingScore(s: HabitSignals): number {
+    const activeBooks = this.statusCount(s.readStatus, 'READING', 'RE_READING');
     const activeScore = Math.min(75, activeBooks <= 1 ? activeBooks * 10 : 10 + (activeBooks - 1) * 20);
 
-    // Partial-progress books (started but not currently reading or finished)
-    const partialBooks = books.filter(book => {
-      if (book.readStatus === ReadStatus.READING || book.readStatus === ReadStatus.RE_READING) return false;
-      if (book.readStatus === ReadStatus.READ) return false;
-      const progress = this.getBookProgress(book);
-      return progress > 10 && progress < 90;
-    });
-    const partialScore = Math.min(25, partialBooks.length * 5);
+    const midProgress = s.progressPercent
+      .filter(b => ['10', '25', '50', '75'].includes(b.value))
+      .reduce((sum, b) => sum + b.count, 0);
+    const partialBooks = Math.max(0, midProgress - activeBooks);
+    const partialScore = Math.min(25, partialBooks * 5);
 
     return Math.min(100, Math.round(activeScore + partialScore));
   }
 
-  // Completion rate vs abandonment among started books
-  private calculateCompletionismScore(books: Book[]): number {
-    const started = books.filter(b =>
-      b.readStatus === ReadStatus.READ ||
-      b.readStatus === ReadStatus.ABANDONED ||
-      b.readStatus === ReadStatus.READING ||
-      b.readStatus === ReadStatus.RE_READING ||
-      this.getBookProgress(b) > 0
-    );
+  private calculateCompletionismScore(s: HabitSignals): number {
+    const started = this.statusCount(s.readStatus, 'READ', 'ABANDONED', 'READING', 'RE_READING');
+    if (started === 0) return 0;
 
-    if (started.length === 0) return 0;
+    const completed = this.statusCount(s.readStatus, 'READ');
+    const abandoned = this.statusCount(s.readStatus, 'ABANDONED');
+    const completionRate = completed / started;
+    const abandonmentRate = abandoned / started;
 
-    const completed = books.filter(b => b.readStatus === ReadStatus.READ);
-    const abandoned = books.filter(b => b.readStatus === ReadStatus.ABANDONED);
-
-    const completionRate = completed.length / started.length;
-    const abandonmentRate = abandoned.length / started.length;
-
-    const completionScore = completionRate * 75;
-    const loyaltyScore = (1 - abandonmentRate) * 25;
-
-    return Math.min(100, Math.round(completionScore + loyaltyScore));
+    return Math.min(100, Math.round(completionRate * 75 + (1 - abandonmentRate) * 25));
   }
 
-  // Author diversity relative to library size + publication era spread + languages
-  private calculateExplorationScore(books: Book[]): number {
-    const authors = new Set<string>();
-    books.forEach(book => {
-      book.metadata?.authors?.forEach(a => authors.add(a.toLowerCase()));
-    });
-
-    // Unique authors relative to book count (1:1 ratio = max diversity)
-    const authorRatio = authors.size / Math.max(1, books.length);
+  private calculateExplorationScore(s: HabitSignals): number {
+    const authorRatio = s.authors.length / Math.max(1, s.summary.totalBooks);
     const diversityScore = Math.min(60, authorRatio * 60);
 
-    // Publication era spread
-    const years: number[] = [];
-    books.forEach(book => {
-      if (book.metadata?.publishedDate) {
-        const year = new Date(book.metadata.publishedDate).getFullYear();
-        if (year > 0) years.push(year);
-      }
-    });
+    const years = s.publishedYear.buckets.map(b => Number(b.period));
     let temporalScore = 0;
     if (years.length >= 2) {
       const yearSpread = Math.max(...years) - Math.min(...years);
       temporalScore = Math.min(25, yearSpread * 0.5);
     }
 
-    // Language variety
-    const languages = new Set<string>();
-    books.forEach(book => {
-      if (book.metadata?.language) languages.add(book.metadata.language);
-    });
-    const languageScore = Math.min(15, Math.max(0, languages.size - 1) * 7.5);
-
+    const languageScore = Math.min(15, Math.max(0, s.languages.length - 1) * 7.5);
     return Math.min(100, Math.round(diversityScore + temporalScore + languageScore));
   }
 
-  // Library curation: rating discipline + read status management + series tracking
-  private calculateOrganizationScore(books: Book[]): number {
-    // Rating discipline: % of completed books with personal ratings
-    const completedBooks = books.filter(b => b.readStatus === ReadStatus.READ);
-    const ratedCompleted = completedBooks.filter(b => b.personalRating);
-    const ratingRate = completedBooks.length > 0 ? ratedCompleted.length / completedBooks.length : 0;
+  // ponytail: "rated among completed" needs a rating x read-status crosstab that isn't
+  // allow-listed - rating discipline uses the overall rated fraction instead.
+  private calculateOrganizationScore(s: HabitSignals): number {
+    const ratedTotal = s.personalRating.reduce((sum, b) => sum + b.count, 0);
+    const ratingRate = s.summary.totalBooks > 0 ? ratedTotal / s.summary.totalBooks : 0;
     const ratingScore = ratingRate * 40;
 
-    // Read status discipline: % of books with a status set (not UNSET)
-    const statusSet = books.filter(b => b.readStatus && b.readStatus !== ReadStatus.UNSET);
-    const statusRate = statusSet.length / books.length;
+    const unsetCount = this.statusCount(s.readStatus, 'UNSET');
+    const statusRate = s.summary.totalBooks > 0 ? (s.summary.totalBooks - unsetCount) / s.summary.totalBooks : 0;
     const statusScore = statusRate * 35;
 
-    // Series tracking: % of series books with series numbers
-    const seriesBooks = books.filter(b => b.metadata?.seriesName);
-    const numberedSeries = seriesBooks.filter(b => b.metadata?.seriesNumber);
-    const seriesRate = seriesBooks.length > 0 ? numberedSeries.length / seriesBooks.length : 1;
-    const seriesScore = seriesRate * 25;
-
+    const seriesScore = 25; // no per-book series-number completeness signal exposed server-side
     return Math.min(100, Math.round(ratingScore + statusScore + seriesScore));
   }
 
-  // Average book length + deep reading progress
-  private calculateIntensityScore(books: Book[]): number {
-    const booksWithPages = books.filter(b => b.metadata?.pageCount && b.metadata.pageCount > 0);
-    if (booksWithPages.length === 0) return 0;
+  private calculateIntensityScore(s: HabitSignals): number {
+    const totalWithPages = s.pageCount.reduce((sum, b) => sum + b.count, 0);
+    if (totalWithPages === 0) return 0;
 
-    const avgPages = booksWithPages.reduce((sum, b) => sum + (b.metadata?.pageCount || 0), 0) / booksWithPages.length;
-    // 200 avg = 20, 400 avg = 40, 600+ avg = 60
+    const weightedSum = s.pageCount.reduce((sum, b) => sum + b.count * ((b.min + b.max) / 2), 0);
+    const avgPages = weightedSum / totalWithPages;
     const lengthScore = Math.min(60, avgPages / 10);
 
-    // Books read past 75% progress
-    const deepReaders = books.filter(b => this.getBookProgress(b) > 75);
-    const progressScore = books.length > 0 ? Math.min(40, (deepReaders.length / books.length) * 40) : 0;
-
+    const deepReaders = s.progressPercent.filter(b => ['75', '90', '100'].includes(b.value)).reduce((sum, b) => sum + b.count, 0);
+    const progressScore = Math.min(40, (deepReaders / s.summary.totalBooks) * 40);
     return Math.min(100, Math.round(lengthScore + progressScore));
   }
 
-  // Reading series in order + deep author dives + focused genre reading
-  private calculateMethodologyScore(books: Book[]): number {
-    // Series order discipline
-    const seriesBooks = books.filter(b => b.metadata?.seriesName && b.metadata?.seriesNumber);
-    const seriesGroups = new Map<string, Book[]>();
-    seriesBooks.forEach(book => {
-      const name = book.metadata!.seriesName!.toLowerCase();
-      if (!seriesGroups.has(name)) seriesGroups.set(name, []);
-      seriesGroups.get(name)!.push(book);
-    });
+  // ponytail: true series-order discipline needs per-book series-number/finish-date pairs -
+  // approximated here by how many multi-book series exist at all.
+  private calculateMethodologyScore(s: HabitSignals): number {
+    const multiBookSeries = s.series.filter(b => b.count >= 2).length;
+    const orderScore = s.series.length > 0 ? Math.min(50, (multiBookSeries / s.series.length) * 50) : 25;
 
-    let orderedSeries = 0;
-    let totalMultiBookSeries = 0;
-    seriesGroups.forEach(group => {
-      if (group.length < 2) return;
-      totalMultiBookSeries++;
-
-      const sorted = [...group].sort((a, b) =>
-        (a.metadata?.seriesNumber || 0) - (b.metadata?.seriesNumber || 0)
-      );
-
-      // Check if completion dates follow series number order
-      const datesInOrder = sorted.every((book, i) => {
-        if (i === 0) return true;
-        if (!book.dateFinished || !sorted[i - 1].dateFinished) return true;
-        return new Date(book.dateFinished) >= new Date(sorted[i - 1].dateFinished!);
-      });
-
-      if (datesInOrder) orderedSeries++;
-    });
-
-    const orderScore = totalMultiBookSeries > 0
-      ? (orderedSeries / totalMultiBookSeries) * 50
-      : 25;
-
-    // Deep author dives (3+ books by same author)
-    const authorCounts = new Map<string, number>();
-    books.forEach(book => {
-      book.metadata?.authors?.forEach(a => {
-        const name = a.toLowerCase();
-        authorCounts.set(name, (authorCounts.get(name) || 0) + 1);
-      });
-    });
-    const deepDiveAuthors = Array.from(authorCounts.values()).filter(c => c >= 3).length;
+    const deepDiveAuthors = s.authors.filter(a => a.bookCount >= 3).length;
     const authorDepthScore = Math.min(30, deepDiveAuthors * 10);
 
-    // Focused genre reading (5+ books in a genre)
-    const genreCounts = new Map<string, number>();
-    books.forEach(book => {
-      book.metadata?.categories?.forEach(cat => {
-        genreCounts.set(cat.toLowerCase(), (genreCounts.get(cat.toLowerCase()) || 0) + 1);
-      });
-    });
-    const focusedGenres = Array.from(genreCounts.values()).filter(c => c >= 5).length;
+    const focusedGenres = s.categories.filter(c => c.count >= 5).length;
     const genreDepthScore = Math.min(20, focusedGenres * 5);
 
     return Math.min(100, Math.round(orderScore + authorDepthScore + genreDepthScore));
   }
 
-  // Recent reading activity + currently reading + acceleration
-  private calculateMomentumScore(books: Book[]): number {
+  private calculateMomentumScore(s: HabitSignals): number {
     const now = new Date();
-    const threeMonthsAgo = new Date(now);
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-    const sixMonthsAgo = new Date(now);
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+    const sixMonthsKey = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, '0')}`;
 
-    // Recent completions (last 6 months): ~1 per month = ~45pts
-    const recentCompletions = books.filter(b =>
-      b.readStatus === ReadStatus.READ && b.dateFinished &&
-      new Date(b.dateFinished) > sixMonthsAgo
-    );
-    const recentScore = Math.min(45, recentCompletions.length * 7.5);
+    const recentCompletions = s.finishedByMonth.buckets
+      .filter(b => b.period >= sixMonthsKey)
+      .reduce((sum, b) => sum + b.count, 0);
+    const recentScore = Math.min(45, recentCompletions * 7.5);
 
-    // Currently reading
-    const activeBooks = books.filter(b =>
-      b.readStatus === ReadStatus.READING || b.readStatus === ReadStatus.RE_READING
-    );
-    const activeScore = Math.min(30, activeBooks.length * 10);
+    const activeBooks = this.statusCount(s.readStatus, 'READING', 'RE_READING');
+    const activeScore = Math.min(30, activeBooks * 10);
 
-    // Almost-done books (>70% progress, not yet finished)
-    const almostDone = books.filter(b => {
-      const p = this.getBookProgress(b);
-      return p > 70 && p < 100 && b.readStatus !== ReadStatus.READ;
-    });
-    const progressScore = Math.min(25, almostDone.length * 8);
+    const almostDone = s.progressPercent.filter(b => ['75', '90'].includes(b.value)).reduce((sum, b) => sum + b.count, 0);
+    const progressScore = Math.min(25, almostDone * 8);
 
     return Math.min(100, Math.round(recentScore + activeScore + progressScore));
-  }
-
-  private getBookProgress(book: Book): number {
-    return Math.max(
-      book.epubProgress?.percentage || 0,
-      book.pdfProgress?.percentage || 0,
-      book.cbxProgress?.percentage || 0,
-      book.koreaderProgress?.percentage || 0,
-      book.koboProgress?.percentage || 0
-    );
   }
 
   private getHabitDescription(habitKey: string, score: number): string {
