@@ -1,9 +1,10 @@
 import {Component, computed, inject} from '@angular/core';
+import {toObservable, toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData} from 'chart.js';
+import {catchError, of, switchMap} from 'rxjs';
 import {LibraryFilterService} from '../../service/library-filter.service';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book} from '../../../../../book/model/book.model';
+import {LibraryStatsService} from '../../service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 interface TrendInsights {
@@ -34,30 +35,33 @@ type TrendChartData = ChartData<'line', number[], string>;
   styleUrls: ['./publication-trend-chart.component.scss']
 })
 export class PublicationTrendChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly t = inject(TranslocoService);
-  private readonly booksWithDate = computed(() => {
-    if (this.bookService.isBooksLoading()) {
-      return [];
-    }
-
-    const filteredBooks = this.filterBooksByLibrary(this.bookService.books(), this.libraryFilterService.selectedLibrary());
-    return filteredBooks.filter(b => b.metadata?.publishedDate);
+  private readonly buckets = toSignal(
+    toObservable(this.libraryFilterService.selectedLibrary).pipe(
+      switchMap(libraryId => this.libraryStatsService.timeline('published_date', 'year', libraryId).pipe(
+        catchError(() => of({buckets: [], oldest: null, newest: null, avgDaysToFinish: null}))
+      ))
+    ),
+    {initialValue: {buckets: [], oldest: null, newest: null, avgDaysToFinish: null}}
+  );
+  private readonly yearCounts = computed(() => {
+    const map = new Map<number, number>();
+    this.buckets().buckets.forEach(b => map.set(Number(b.period), b.count));
+    return map;
   });
-  private readonly yearCounts = computed(() => this.calculateYearCounts(this.booksWithDate()));
 
   public readonly chartType = 'line' as const;
   public chartOptions: ChartConfiguration<'line'>['options'];
+  public readonly totalBooks = computed(() => Array.from(this.yearCounts().values()).reduce((sum, c) => sum + c, 0));
   public readonly insights = computed(() => {
-    const booksWithDate = this.booksWithDate();
-    if (booksWithDate.length === 0) {
+    if (this.totalBooks() === 0) {
       return null;
     }
 
-    return this.calculateInsights(this.yearCounts(), booksWithDate.length);
+    return this.calculateInsights(this.yearCounts(), this.totalBooks());
   });
-  public readonly totalBooks = computed(() => this.booksWithDate().length);
   public readonly yearRange = computed(() => {
     const years = Array.from(this.yearCounts().keys()).sort((a, b) => a - b);
     if (years.length === 0) {
@@ -195,37 +199,6 @@ export class PublicationTrendChartComponent {
         mode: 'index'
       }
     };
-  }
-
-  private filterBooksByLibrary(books: Book[], selectedLibraryId: number | null): Book[] {
-    return selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
-  }
-
-  private calculateYearCounts(books: Book[]): Map<number, number> {
-    const yearCounts = new Map<number, number>();
-
-    for (const book of books) {
-      const year = this.extractYear(book.metadata?.publishedDate);
-      if (!year) continue;
-      yearCounts.set(year, (yearCounts.get(year) || 0) + 1);
-    }
-
-    return yearCounts;
-  }
-
-  private extractYear(dateStr: string | undefined): number | null {
-    if (!dateStr) return null;
-
-    const yearMatch = dateStr.match(/\d{4}/);
-    if (yearMatch) {
-      const year = parseInt(yearMatch[0], 10);
-      if (year >= 1000 && year <= new Date().getFullYear() + 1) {
-        return year;
-      }
-    }
-    return null;
   }
 
   private calculateInsights(yearCounts: Map<number, number>, totalBooks: number): TrendInsights {

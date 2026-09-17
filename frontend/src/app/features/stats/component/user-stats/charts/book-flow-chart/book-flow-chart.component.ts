@@ -1,7 +1,8 @@
-import {AfterViewInit, Component, effect, ElementRef, inject, ViewChild} from '@angular/core';
+import {AfterViewInit, Component, DestroyRef, effect, ElementRef, inject, ViewChild} from '@angular/core';
+import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../../../book/model/book.model';
+import {catchError, combineLatest, EMPTY} from 'rxjs';
+import {LibraryStatsService, type LibraryCrosstabCell} from '../../../library-stats/service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {StatsChartThemeService} from '../../../shared/stats-chart-theme.service';
 
@@ -32,21 +33,27 @@ interface SankeyLink {
 export class BookFlowChartComponent implements AfterViewInit {
   @ViewChild('flowCanvas', {static: false}) canvasRef!: ElementRef<HTMLCanvasElement>;
 
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly t = inject(TranslocoService);
   private readonly chartTheme = inject(StatsChartThemeService);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly syncChartEffect = effect(() => {
     this.chartTheme.themeRevision();
-
-    if (this.bookService.isBooksLoading()) {
-      this.dataReady = false;
-      return;
-    }
-
-    this.processData(this.bookService.books());
-    this.dataReady = true;
     this.tryRender();
   });
+
+  constructor() {
+    combineLatest([
+      this.libraryStatsService.crosstab('added_quarter', 'read_status', null),
+      this.libraryStatsService.crosstab('read_status', 'personal_rating_bucket', null)
+    ])
+      .pipe(catchError(() => EMPTY), takeUntilDestroyed(this.destroyRef))
+      .subscribe(([quarterStatus, statusRating]) => {
+        this.processData(quarterStatus, statusRating);
+        this.dataReady = true;
+        this.tryRender();
+      });
+  }
 
   public hasData = false;
   public totalBooks = 0;
@@ -70,7 +77,7 @@ export class BookFlowChartComponent implements AfterViewInit {
     }
   }
 
-  private processData(books: Book[]): void {
+  private processData(quarterStatus: LibraryCrosstabCell[], statusRating: LibraryCrosstabCell[]): void {
     this.hasData = false;
     this.totalBooks = 0;
     this.topQuarter = '';
@@ -79,7 +86,7 @@ export class BookFlowChartComponent implements AfterViewInit {
     this.nodes = [];
     this.links = [];
 
-    if (books.length === 0) {
+    if (quarterStatus.length === 0) {
       return;
     }
 
@@ -99,49 +106,32 @@ export class BookFlowChartComponent implements AfterViewInit {
       'Rated 1-2': '#ef5350', 'Unrated': '#78909c'
     };
 
-    for (const book of books) {
-      const addedOn = book.addedOn;
-      let quarter = 'Unknown';
-      if (addedOn) {
-        const date = new Date(addedOn);
-        const q = Math.ceil((date.getMonth() + 1) / 3);
-        quarter = `${date.getFullYear()} Q${q}`;
-      }
+    let totalBooks = 0;
+    for (const cell of quarterStatus) {
+      const quarter = cell.row;
+      const status = cell.col;
 
-      let status = 'Other';
-      switch (book.readStatus) {
-        case ReadStatus.READ: status = 'Read'; break;
-        case ReadStatus.READING: case ReadStatus.RE_READING: status = 'Reading'; break;
-        case ReadStatus.UNREAD: case ReadStatus.UNSET: status = 'Unread'; break;
-        case ReadStatus.PAUSED: status = 'Paused'; break;
-        case ReadStatus.ABANDONED: case ReadStatus.WONT_READ: status = 'Abandoned'; break;
-      }
-
-      let ratingBucket = 'Unrated';
-      const rating = book.personalRating;
-      if (rating && rating > 0) {
-        const normalized = rating / 2;
-        if (normalized >= 4) ratingBucket = 'Rated 4-5';
-        else if (normalized >= 3) ratingBucket = 'Rated 3';
-        else ratingBucket = 'Rated 1-2';
-      }
-
-      quarterMap.set(quarter, (quarterMap.get(quarter) || 0) + 1);
-      statusMap.set(status, (statusMap.get(status) || 0) + 1);
-      ratingMap.set(ratingBucket, (ratingMap.get(ratingBucket) || 0) + 1);
+      quarterMap.set(quarter, (quarterMap.get(quarter) || 0) + cell.count);
+      statusMap.set(status, (statusMap.get(status) || 0) + cell.count);
+      totalBooks += cell.count;
 
       if (!quarterToStatus.has(quarter)) quarterToStatus.set(quarter, new Map());
-      const qsMap = quarterToStatus.get(quarter)!;
-      qsMap.set(status, (qsMap.get(status) || 0) + 1);
+      quarterToStatus.get(quarter)!.set(status, cell.count);
+    }
+
+    for (const cell of statusRating) {
+      const status = cell.row;
+      const ratingBucket = cell.col;
+
+      ratingMap.set(ratingBucket, (ratingMap.get(ratingBucket) || 0) + cell.count);
 
       if (!statusToRating.has(status)) statusToRating.set(status, new Map());
-      const srMap = statusToRating.get(status)!;
-      srMap.set(ratingBucket, (srMap.get(ratingBucket) || 0) + 1);
+      statusToRating.get(status)!.set(ratingBucket, cell.count);
     }
 
     if (quarterMap.size === 0) return;
     this.hasData = true;
-    this.totalBooks = books.length;
+    this.totalBooks = totalBooks;
 
     const sortedQuarters = [...quarterMap.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -152,7 +142,7 @@ export class BookFlowChartComponent implements AfterViewInit {
     this.topStatus = topStatusEntry?.[0] || '';
 
     const readCount = statusMap.get('Read') || 0;
-    this.completionRate = books.length > 0 ? Math.round((readCount / books.length) * 100) + '%' : '0%';
+    this.completionRate = totalBooks > 0 ? Math.round((readCount / totalBooks) * 100) + '%' : '0%';
 
     const quarterColors = ['#42a5f5', '#26c6da', '#66bb6a', '#ffa726', '#ab47bc', '#ef5350', '#ec407a', '#7e57c2'];
 

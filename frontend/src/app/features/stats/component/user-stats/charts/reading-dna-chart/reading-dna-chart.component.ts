@@ -1,9 +1,10 @@
 import {Component, computed, inject} from '@angular/core';
+import {toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData} from 'chart.js';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../../../book/model/book.model';
+import {catchError, forkJoin, map, of} from 'rxjs';
+import {LibraryStatsService, type LibraryAggregateBucket, type LibraryHistogramBucket, type LibrarySummary, type LibraryTimelineResponse} from '../../../library-stats/service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 interface ReadingDNAProfile {
@@ -24,7 +25,29 @@ interface PersonalityInsight {
   color: string;
 }
 
+// Primitives combined to reconstruct the eight-trait profile without a per-book payload.
+interface DnaSignals {
+  summary: LibrarySummary;
+  categories: LibraryAggregateBucket[];
+  languages: LibraryAggregateBucket[];
+  readStatus: LibraryAggregateBucket[];
+  personalRating: LibraryAggregateBucket[];
+  pageCount: LibraryHistogramBucket[];
+  publishedYear: LibraryTimelineResponse;
+  series: LibraryAggregateBucket[];
+  progressPercent: LibraryAggregateBucket[];
+}
+
 type ReadingDNAChartData = ChartData<'radar', number[], string>;
+
+const INTELLECTUAL_GENRES = [
+  'philosophy', 'history', 'biography', 'politics', 'psychology',
+  'economics', 'mathematics', 'engineering', 'medicine', 'law',
+  'education', 'sociology', 'nonfiction', 'non-fiction', 'academic'
+];
+const EMOTIONAL_GENRES = ['romance', 'memoir', 'poetry', 'drama', 'self-help', 'autobiography', 'literary fiction', 'coming of age'];
+const MAINSTREAM_GENRES = ['thriller', 'mystery', 'crime', 'suspense', 'horror', 'fantasy', 'science fiction', 'adventure', 'true crime', 'humor', 'graphic novel', 'manga', 'comic'];
+const CLASSIC_GENRES = ['classic', 'mythology', 'folklore', 'fairy tale', 'ancient', 'medieval', 'victorian', 'gothic'];
 
 @Component({
   selector: 'app-reading-dna-chart',
@@ -34,14 +57,25 @@ type ReadingDNAChartData = ChartData<'radar', number[], string>;
   styleUrls: ['./reading-dna-chart.component.scss']
 })
 export class ReadingDNAChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly t = inject(TranslocoService);
+  private readonly signals = toSignal(
+    forkJoin({
+      summary: this.libraryStatsService.summary(null),
+      categories: this.libraryStatsService.aggregate('categories', null),
+      languages: this.libraryStatsService.aggregate('language', null),
+      readStatus: this.libraryStatsService.aggregate('read_status', null),
+      personalRating: this.libraryStatsService.aggregate('personal_rating', null),
+      pageCount: this.libraryStatsService.histogram('page_count', null),
+      publishedYear: this.libraryStatsService.timeline('published_date', 'year', null),
+      series: this.libraryStatsService.aggregate('series', null),
+      progressPercent: this.libraryStatsService.aggregate('progress_percent', null)
+    }).pipe(map(s => s as DnaSignals), catchError(() => of(null))),
+    {initialValue: null}
+  );
   private readonly profile = computed(() => {
-    if (this.bookService.isBooksLoading()) {
-      return null;
-    }
-
-    return this.calculateReadingDNAData(this.bookService.books());
+    const signals = this.signals();
+    return signals && signals.summary.totalBooks > 0 ? this.analyzeReadingDNA(signals) : null;
   });
 
   public readonly chartType = 'radar' as const;
@@ -180,208 +214,102 @@ export class ReadingDNAChartComponent {
     return profile ? this.buildPersonalityInsights(profile) : [];
   });
 
-  private calculateReadingDNAData(books: Book[]): ReadingDNAProfile | null {
-    if (books.length === 0) {
-      return null;
-    }
-
-    return this.analyzeReadingDNA(books);
-  }
-
-  private analyzeReadingDNA(books: Book[]): ReadingDNAProfile | null {
-    if (books.length === 0) {
-      return null;
-    }
-
+  private analyzeReadingDNA(signals: DnaSignals): ReadingDNAProfile {
     return {
-      adventurous: this.calculateAdventurousScore(books),
-      perfectionist: this.calculatePerfectionistScore(books),
-      intellectual: this.calculateIntellectualScore(books),
-      emotional: this.calculateEmotionalScore(books),
-      patient: this.calculatePatienceScore(books),
-      social: this.calculateSocialScore(books),
-      nostalgic: this.calculateNostalgicScore(books),
-      ambitious: this.calculateAmbitiousScore(books)
+      adventurous: this.calculateAdventurousScore(signals),
+      perfectionist: this.calculatePerfectionistScore(signals),
+      intellectual: this.calculateIntellectualScore(signals),
+      emotional: this.calculateEmotionalScore(signals),
+      patient: this.calculatePatienceScore(signals),
+      social: this.calculateSocialScore(signals),
+      nostalgic: this.calculateNostalgicScore(signals),
+      ambitious: this.calculateAmbitiousScore(signals)
     };
   }
 
-  // Genre diversity + language variety
-  private calculateAdventurousScore(books: Book[]): number {
-    const genres = new Set<string>();
-    const languages = new Set<string>();
+  private bucketFraction(buckets: LibraryAggregateBucket[], total: number, matches: (value: string) => boolean): number {
+    if (total === 0) return 0;
+    const matched = buckets.filter(b => matches(b.value)).reduce((sum, b) => sum + b.count, 0);
+    return matched / total;
+  }
 
-    books.forEach(book => {
-      book.metadata?.categories?.forEach(cat => genres.add(cat.toLowerCase()));
-      if (book.metadata?.language) languages.add(book.metadata.language);
-    });
+  private genreMatches(keywords: string[]): (value: string) => boolean {
+    return value => keywords.some(k => value.toLowerCase().includes(k));
+  }
 
-    // Having unique genres equal to 40% of book count = max genre diversity
-    const diversityRatio = genres.size / Math.max(1, books.length * 0.4);
+  // Genre diversity + language variety - both read directly off the aggregate bucket counts.
+  private calculateAdventurousScore(s: DnaSignals): number {
+    const diversityRatio = s.categories.length / Math.max(1, s.summary.totalBooks * 0.4);
     const genreScore = Math.min(75, diversityRatio * 75);
-
-    // Each language beyond the first adds 12.5 pts
-    const languageScore = Math.min(25, Math.max(0, languages.size - 1) * 12.5);
-
+    const languageScore = Math.min(25, Math.max(0, s.languages.length - 1) * 12.5);
     return Math.min(100, Math.round(genreScore + languageScore));
   }
 
-  // Completion rate + high personal ratings
-  private calculatePerfectionistScore(books: Book[]): number {
-    const completedBooks = books.filter(b => b.readStatus === ReadStatus.READ);
-    const completionRate = completedBooks.length / books.length;
-
-    const ratedBooks = books.filter(book => book.personalRating);
-    const highRatedBooks = ratedBooks.filter(book => book.personalRating! >= 4);
-    const highRatingRate = ratedBooks.length > 0 ? highRatedBooks.length / ratedBooks.length : 0;
-
+  // Completion rate + high personal ratings, both from aggregate buckets.
+  private calculatePerfectionistScore(s: DnaSignals): number {
+    const completionRate = this.bucketFraction(s.readStatus, s.summary.totalBooks, v => v === 'READ');
+    const ratedTotal = s.personalRating.reduce((sum, b) => sum + b.count, 0);
+    const highRatedCount = s.personalRating.filter(b => Number(b.value) >= 4).reduce((sum, b) => sum + b.count, 0);
+    const highRatingRate = ratedTotal > 0 ? highRatedCount / ratedTotal : 0;
     return Math.min(100, Math.round(completionRate * 60 + highRatingRate * 40));
   }
 
-  // Non-fiction/academic genre proportion + long books
-  private calculateIntellectualScore(books: Book[]): number {
-    const intellectualGenres = [
-      'philosophy', 'history', 'biography', 'politics', 'psychology',
-      'economics', 'mathematics', 'engineering', 'medicine', 'law',
-      'education', 'sociology', 'nonfiction', 'non-fiction', 'academic'
-    ];
-
-    const intellectualBooks = books.filter(book =>
-      this.bookMatchesGenres(book, intellectualGenres)
-    );
-
-    const longBooks = books.filter(book =>
-      book.metadata?.pageCount && book.metadata.pageCount > 400
-    );
-
-    const intellectualRate = intellectualBooks.length / books.length;
-    const longBookRate = longBooks.length / books.length;
-
+  // Non-fiction/academic genre proportion + long books, via category and page-count buckets.
+  private calculateIntellectualScore(s: DnaSignals): number {
+    const intellectualRate = this.bucketFraction(s.categories, s.summary.totalBooks, this.genreMatches(INTELLECTUAL_GENRES));
+    const longBookRate = this.longBookFraction(s.pageCount, s.summary.totalBooks, 400);
     return Math.min(100, Math.round(intellectualRate * 70 + longBookRate * 30));
   }
 
-  // Emotionally-driven genre proportion + rating engagement
-  private calculateEmotionalScore(books: Book[]): number {
-    const emotionalGenres = [
-      'romance', 'memoir', 'poetry', 'drama', 'self-help',
-      'autobiography', 'literary fiction', 'coming of age'
-    ];
-
-    const emotionalBooks = books.filter(book =>
-      this.bookMatchesGenres(book, emotionalGenres)
-    );
-
-    const ratedBooks = books.filter(book => book.personalRating);
-    const ratingEngagement = ratedBooks.length / books.length;
-    const emotionalRate = emotionalBooks.length / books.length;
-
+  // Emotionally-driven genre proportion + rating engagement.
+  private calculateEmotionalScore(s: DnaSignals): number {
+    const emotionalRate = this.bucketFraction(s.categories, s.summary.totalBooks, this.genreMatches(EMOTIONAL_GENRES));
+    const ratedTotal = s.personalRating.reduce((sum, b) => sum + b.count, 0);
+    const ratingEngagement = s.summary.totalBooks > 0 ? ratedTotal / s.summary.totalBooks : 0;
     return Math.min(100, Math.round(emotionalRate * 70 + ratingEngagement * 30));
   }
 
-  // Long books + series reading + in-progress commitment
-  private calculatePatienceScore(books: Book[]): number {
-    const longBooks = books.filter(book =>
-      book.metadata?.pageCount && book.metadata.pageCount > 500
-    );
-
-    const seriesBooks = books.filter(book =>
-      book.metadata?.seriesName && book.metadata?.seriesNumber
-    );
-
-    const progressBooks = books.filter(book => this.getBookProgress(book) > 50);
-
-    const longBookRate = longBooks.length / books.length;
-    const seriesRate = seriesBooks.length / books.length;
-    const progressRate = progressBooks.length / books.length;
-
+  // Long books + series membership + deep progress, via histogram/category/progress buckets.
+  private calculatePatienceScore(s: DnaSignals): number {
+    const longBookRate = this.longBookFraction(s.pageCount, s.summary.totalBooks, 500);
+    const seriesRate = this.bucketFraction(s.series, s.summary.totalBooks, () => true);
+    const progressRate = this.bucketFraction(s.progressPercent, s.summary.totalBooks, v => Number(v) >= 50);
     return Math.min(100, Math.round(longBookRate * 40 + seriesRate * 35 + progressRate * 25));
   }
 
-  // Popular/mainstream genre proportion + high review counts
-  private calculateSocialScore(books: Book[]): number {
-    const mainstreamGenres = [
-      'thriller', 'mystery', 'crime', 'suspense', 'horror',
-      'fantasy', 'science fiction', 'adventure', 'true crime',
-      'humor', 'graphic novel', 'manga', 'comic'
-    ];
-
-    const mainstreamBooks = books.filter(book =>
-      this.bookMatchesGenres(book, mainstreamGenres)
-    );
-
-    const popularBooks = books.filter(book => {
-      const m = book.metadata;
-      if (!m) return false;
-      return (m.goodreadsReviewCount && m.goodreadsReviewCount > 10000) ||
-        (m.amazonReviewCount && m.amazonReviewCount > 2000);
-    });
-
-    const mainstreamRate = mainstreamBooks.length / books.length;
-    const popularRate = popularBooks.length / books.length;
-
-    return Math.min(100, Math.round(mainstreamRate * 50 + popularRate * 50));
+  // Popular/mainstream genre proportion (review-count popularity is not exposed by any endpoint).
+  private calculateSocialScore(s: DnaSignals): number {
+    const mainstreamRate = this.bucketFraction(s.categories, s.summary.totalBooks, this.genreMatches(MAINSTREAM_GENRES));
+    return Math.min(100, Math.round(mainstreamRate * 100));
   }
 
-  // Old publication dates + classic genre proportion
-  private calculateNostalgicScore(books: Book[]): number {
+  // Old publication dates + classic genre proportion, via the published_date timeline.
+  private calculateNostalgicScore(s: DnaSignals): number {
     const currentYear = new Date().getFullYear();
     const classicThreshold = currentYear - 30;
-
-    const oldBooks = books.filter(book => {
-      if (!book.metadata?.publishedDate) return false;
-      const pubYear = new Date(book.metadata.publishedDate).getFullYear();
-      return pubYear > 0 && pubYear < classicThreshold;
-    });
-
-    const classicGenres = [
-      'classic', 'mythology', 'folklore', 'fairy tale',
-      'ancient', 'medieval', 'victorian', 'gothic'
-    ];
-
-    const classicBooks = books.filter(book =>
-      this.bookMatchesGenres(book, classicGenres)
-    );
-
-    const oldBookRate = oldBooks.length / books.length;
-    const classicRate = classicBooks.length / books.length;
-
+    const totalWithYear = s.publishedYear.buckets.reduce((sum, b) => sum + b.count, 0);
+    const oldCount = s.publishedYear.buckets
+      .filter(b => Number(b.period) < classicThreshold)
+      .reduce((sum, b) => sum + b.count, 0);
+    const oldBookRate = totalWithYear > 0 ? oldCount / totalWithYear : 0;
+    const classicRate = this.bucketFraction(s.categories, s.summary.totalBooks, this.genreMatches(CLASSIC_GENRES));
     return Math.min(100, Math.round(oldBookRate * 60 + classicRate * 40));
   }
 
-  // Library volume + challenging book proportion + completion of challenging books
-  private calculateAmbitiousScore(books: Book[]): number {
-    // Need ~100 books to max out the volume component
-    const volumeScore = Math.min(40, books.length * 0.4);
-
-    const challengingBooks = books.filter(book =>
-      book.metadata?.pageCount && book.metadata.pageCount > 600
-    );
-
-    const completedChallenging = challengingBooks.filter(book =>
-      book.readStatus === ReadStatus.READ
-    );
-
-    const challengingRate = challengingBooks.length / books.length;
-    const completionRate = challengingBooks.length > 0 ?
-      completedChallenging.length / challengingBooks.length : 0;
-
+  // Library volume + challenging (600+ page) book proportion (completion-of-challenging is not
+  // separately exposed, so the completion term folds into the overall READ rate instead).
+  private calculateAmbitiousScore(s: DnaSignals): number {
+    const volumeScore = Math.min(40, s.summary.totalBooks * 0.4);
+    const challengingRate = this.longBookFraction(s.pageCount, s.summary.totalBooks, 600);
+    const completionRate = this.bucketFraction(s.readStatus, s.summary.totalBooks, v => v === 'READ');
     return Math.min(100, Math.round(volumeScore + challengingRate * 35 + completionRate * 25));
   }
 
-  private bookMatchesGenres(book: Book, genres: string[]): boolean {
-    if (!book.metadata?.categories) return false;
-    return book.metadata.categories.some(cat =>
-      genres.some(genre => cat.toLowerCase().includes(genre))
-    );
-  }
-
-  private getBookProgress(book: Book): number {
-    return Math.max(
-      book.epubProgress?.percentage || 0,
-      book.pdfProgress?.percentage || 0,
-      book.cbxProgress?.percentage || 0,
-      book.koreaderProgress?.percentage || 0,
-      book.koboProgress?.percentage || 0
-    );
+  // Sums histogram buckets whose lower edge is >= threshold as a proxy for "pages > threshold".
+  private longBookFraction(buckets: LibraryHistogramBucket[], total: number, threshold: number): number {
+    if (total === 0) return 0;
+    const matched = buckets.filter(b => b.min >= threshold).reduce((sum, b) => sum + b.count, 0);
+    return matched / total;
   }
 
   private getTraitDescription(traitKey: string, score: number): string {

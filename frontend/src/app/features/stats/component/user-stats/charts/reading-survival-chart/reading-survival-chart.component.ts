@@ -1,9 +1,10 @@
 import {Component, computed, inject} from '@angular/core';
+import {toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {ChartConfiguration, ChartData} from 'chart.js';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book} from '../../../../../book/model/book.model';
+import {catchError, of} from 'rxjs';
+import {LibraryStatsService, type LibraryAggregateBucket} from '../../../library-stats/service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 type SurvivalChartData = ChartData<'line', number[], string>;
@@ -27,15 +28,13 @@ const THRESHOLDS = [0, 10, 25, 50, 75, 90, 100];
   styleUrls: ['./reading-survival-chart.component.scss']
 })
 export class ReadingSurvivalChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly t = inject(TranslocoService);
-  private readonly survivalMetrics = computed<SurvivalMetrics>(() => {
-    if (this.bookService.isBooksLoading()) {
-      return this.emptyMetrics();
-    }
-
-    return this.calculateSurvivalMetrics(this.bookService.books());
-  });
+  private readonly progressBuckets = toSignal(
+    this.libraryStatsService.aggregate('progress_percent', null).pipe(catchError(() => of([] as LibraryAggregateBucket[]))),
+    {initialValue: [] as LibraryAggregateBucket[]}
+  );
+  private readonly survivalMetrics = computed<SurvivalMetrics>(() => this.calculateSurvivalMetrics(this.progressBuckets()));
 
   public readonly chartType = 'line' as const;
   public readonly totalStarted = computed(() => this.survivalMetrics().totalStarted);
@@ -97,21 +96,20 @@ export class ReadingSurvivalChartComponent {
 
   public readonly chartData = computed(() => this.survivalMetrics().chartData);
 
-  private calculateSurvivalMetrics(books: Book[]): SurvivalMetrics {
-    if (books.length === 0) {
-      return this.emptyMetrics();
-    }
-
-    const startedBooks = books.filter(b => this.getBookProgress(b) > 0);
-    const totalStarted = startedBooks.length;
+  // Server buckets partition (0,100] at exactly the survival thresholds (10/25/50/75/90/100), so
+  // survival(T) is the sum of every bucket whose edge is >= T - no per-book data needed.
+  private calculateSurvivalMetrics(buckets: LibraryAggregateBucket[]): SurvivalMetrics {
+    const totalStarted = buckets.reduce((sum, b) => sum + b.count, 0);
 
     if (totalStarted === 0) {
       return this.emptyMetrics();
     }
 
-    const progresses = startedBooks.map(b => this.getBookProgress(b));
+    const countsByEdge = new Map(buckets.map(b => [Number(b.value), b.count]));
     const survivalValues = THRESHOLDS.map(threshold => {
-      const survived = progresses.filter(p => p >= threshold).length;
+      const survived = Array.from(countsByEdge.entries())
+        .filter(([edge]) => edge >= threshold)
+        .reduce((sum, [, count]) => sum + count, 0);
       return (survived / totalStarted) * 100;
     });
 
@@ -173,12 +171,4 @@ export class ReadingSurvivalChartComponent {
     };
   }
 
-  private getBookProgress(book: Book): number {
-    if (book.pdfProgress?.percentage) return book.pdfProgress.percentage;
-    if (book.epubProgress?.percentage) return book.epubProgress.percentage;
-    if (book.cbxProgress?.percentage) return book.cbxProgress.percentage;
-    if (book.koreaderProgress?.percentage) return book.koreaderProgress.percentage;
-    if (book.koboProgress?.percentage) return book.koboProgress.percentage;
-    return 0;
-  }
 }

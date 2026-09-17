@@ -1,49 +1,30 @@
 import {signal} from '@angular/core';
 import {TestBed} from '@angular/core/testing';
+import {of} from 'rxjs';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {TranslocoService} from '@jsverse/transloco';
-import {Book, BookType} from '../../../../../book/model/book.model';
-import {BookService} from '../../../../../book/service/book.service';
 import {LibraryFilterService} from '../../service/library-filter.service';
+import {LibraryStatsService, type LibraryAggregateBucket} from '../../service/library-stats.service';
 import {BookFormatsChartComponent} from './book-formats-chart.component';
 
-const EXPECTED_FORMAT_COLORS = [
-  '#0D9488',
-  '#E11D48',
-  '#6B7280',
-  '#6B7280',
-];
-
-interface BookFormatsTooltipContext {
-  parsed: number;
-  dataset: {
-    data: number[];
-  };
-  label: string;
-}
+const EXPECTED_FORMAT_COLORS = ['#0D9488', '#E11D48', '#6B7280', '#6B7280'];
 
 describe('BookFormatsChartComponent', () => {
-  const books = signal<Book[]>([]);
-  const isBooksLoading = signal(false);
   const selectedLibrary = signal<number | null>(null);
-  const translate = vi.fn((key: string, params?: Record<string, number | string>) => {
-    if (!params) {
-      return key;
-    }
-
-    return `${key}|${Object.entries(params).map(([name, value]) => `${name}=${value}`).join('|')}`;
-  });
+  let aggregate: ReturnType<typeof vi.fn>;
+  const translate = vi.fn((key: string, params?: Record<string, number | string>) =>
+    params ? `${key}|${Object.entries(params).map(([n, v]) => `${n}=${v}`).join('|')}` : key
+  );
 
   beforeEach(() => {
-    books.set([]);
-    isBooksLoading.set(false);
     selectedLibrary.set(null);
+    aggregate = vi.fn(() => of([] as LibraryAggregateBucket[]));
     translate.mockClear();
 
     TestBed.configureTestingModule({
       providers: [
-        {provide: BookService, useValue: {books, isBooksLoading}},
+        {provide: LibraryStatsService, useValue: {aggregate}},
         {provide: LibraryFilterService, useValue: {selectedLibrary}},
         {provide: TranslocoService, useValue: {translate}},
       ],
@@ -55,111 +36,64 @@ describe('BookFormatsChartComponent', () => {
     vi.restoreAllMocks();
   });
 
-  function createBook(id: number, libraryId: number, bookType?: BookType): Book {
-    return {
-      id,
-      title: `Book ${id}`,
-      libraryId,
-      libraryName: `Library ${libraryId}`,
-      primaryFile: bookType === undefined
-        ? undefined
-        : {id: id * 10, bookId: id, bookType},
-    };
-  }
-
   function createComponent(): BookFormatsChartComponent {
     return TestBed.runInInjectionContext(() => new BookFormatsChartComponent());
   }
 
-  function getTooltipLabelCallback(component: BookFormatsChartComponent): ((context: BookFormatsTooltipContext) => string) | undefined {
-    return component.chartOptions?.plugins?.tooltip?.callbacks?.label as
-      | ((context: BookFormatsTooltipContext) => string)
-      | undefined;
-  }
-
-  it('filters books to the selected library and aggregates primary formats into descending stats', () => {
-    books.set([
-      createBook(1, 1, 'EPUB'),
-      createBook(2, 1, 'EPUB'),
-      createBook(3, 1, 'EPUB'),
-      createBook(4, 1, 'EPUB'),
-      createBook(5, 1, 'PDF'),
-      createBook(6, 1, 'PDF'),
-      createBook(7, 1, 'PDF'),
-      createBook(8, 1, 'AUDIOBOOK'),
-      createBook(9, 1, 'AUDIOBOOK'),
-      createBook(10, 1),
-      createBook(11, 2, 'CBX'),
-      createBook(12, 2, 'CBX'),
-    ]);
+  it('requests the file_type aggregate scoped to the selected library and sorts by count', async () => {
     selectedLibrary.set(1);
+    aggregate.mockReturnValue(of([
+      {value: 'PDF', count: 3},
+      {value: 'EPUB', count: 4},
+      {value: 'Unknown', count: 1},
+    ]));
 
     const component = createComponent();
+    await new Promise(resolve => setTimeout(resolve, 0));
 
-    expect(component.totalBooks()).toBe(10);
+    expect(aggregate).toHaveBeenCalledWith('file_type', 1);
+    expect(component.totalBooks()).toBe(8);
     expect(component.formatStats()).toEqual([
-      {format: 'EPUB', count: 4, percentage: 40},
-      {format: 'PDF', count: 3, percentage: 30},
-      {format: 'AUDIOBOOK', count: 2, percentage: 20},
-      {format: 'Unknown', count: 1, percentage: 10},
+      {format: 'EPUB', count: 4, percentage: 50},
+      {format: 'PDF', count: 3, percentage: 37.5},
+      {format: 'Unknown', count: 1, percentage: 12.5},
     ]);
   });
 
-  it('builds deterministic pie chart labels, counts, and colors from computed format stats', () => {
-    books.set([
-      createBook(1, 1, 'EPUB'),
-      createBook(2, 1, 'EPUB'),
-      createBook(3, 1, 'EPUB'),
-      createBook(4, 1, 'EPUB'),
-      createBook(5, 1, 'PDF'),
-      createBook(6, 1, 'PDF'),
-      createBook(7, 1, 'PDF'),
-      createBook(8, 1, 'AUDIOBOOK'),
-      createBook(9, 1, 'AUDIOBOOK'),
-      createBook(10, 1),
-    ]);
+  it('builds deterministic pie chart labels, counts, and colors from computed format stats', async () => {
+    aggregate.mockReturnValue(of([
+      {value: 'EPUB', count: 4},
+      {value: 'PDF', count: 3},
+      {value: 'AUDIOBOOK', count: 2},
+      {value: 'Unknown', count: 1},
+    ]));
 
     const component = createComponent();
+    await new Promise(resolve => setTimeout(resolve, 0));
     const chartData = component.chartData();
     const dataset = chartData.datasets[0];
 
     expect(chartData.labels).toEqual(['EPUB', 'PDF', 'AUDIOBOOK', 'Unknown']);
-
-    expect(dataset).toBeDefined();
-    if (!dataset) {
-      throw new Error('Expected a chart dataset');
-    }
-
-    expect(dataset.data).toEqual([4, 3, 2, 1]);
-    expect(dataset.backgroundColor).toEqual(EXPECTED_FORMAT_COLORS);
-    expect(dataset.borderColor).toBeUndefined();
-    expect(dataset.borderWidth).toBeUndefined();
-    expect(dataset.hoverBorderColor).toBeUndefined();
-    expect(dataset.hoverBorderWidth).toBeUndefined();
+    expect(dataset?.data).toEqual([4, 3, 2, 1]);
+    expect(dataset?.backgroundColor).toEqual(EXPECTED_FORMAT_COLORS);
   });
 
-  it('formats the tooltip callback from computed chart data without a live Chart.js instance', () => {
-    books.set([
-      createBook(1, 1, 'EPUB'),
-      createBook(2, 1, 'EPUB'),
-      createBook(3, 1, 'EPUB'),
-      createBook(4, 1, 'PDF'),
-    ]);
+  it('formats the tooltip callback from computed chart data without a live Chart.js instance', async () => {
+    aggregate.mockReturnValue(of([
+      {value: 'EPUB', count: 3},
+      {value: 'PDF', count: 1},
+    ]));
 
     const component = createComponent();
+    await new Promise(resolve => setTimeout(resolve, 0));
     const chartData = component.chartData();
     const dataset = chartData.datasets[0];
-    const tooltipLabel = getTooltipLabelCallback(component);
-
-    expect(dataset).toBeDefined();
-    expect(tooltipLabel).toBeDefined();
-    if (!dataset || !tooltipLabel) {
-      throw new Error('Expected tooltip callback and dataset');
-    }
+    const tooltipLabel = component.chartOptions?.plugins?.tooltip?.callbacks?.label as
+      (context: {parsed: number; dataset: {data: number[]}; label: string}) => string;
 
     expect(tooltipLabel({
       parsed: 3,
-      dataset: {data: dataset.data as number[]},
+      dataset: {data: dataset?.data as number[]},
       label: 'EPUB',
     })).toBe('statsLibrary.bookFormats.tooltipLabel|label=EPUB|value=3|percentage=75.0');
   });

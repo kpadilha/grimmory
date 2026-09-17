@@ -1,9 +1,10 @@
 import {Component, computed, inject} from '@angular/core';
+import {toObservable, toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData} from 'chart.js';
+import {catchError, of, switchMap} from 'rxjs';
 import {LibraryFilterService} from '../../service/library-filter.service';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book} from '../../../../../book/model/book.model';
+import {LibraryStatsService} from '../../service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {LanguageResolverService} from '../../../../../../shared/service/language-resolver.service';
 
@@ -43,21 +44,20 @@ const LANGUAGE_COLORS = [
   styleUrls: ['./language-chart.component.scss']
 })
 export class LanguageChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly t = inject(TranslocoService);
   private readonly languageResolver = inject(LanguageResolverService);
-  private readonly filteredBooks = computed(() => {
-    if (this.bookService.isBooksLoading()) {
-      return [];
-    }
-
-    return this.filterBooksByLibrary(this.bookService.books(), this.libraryFilterService.selectedLibrary());
-  });
+  private readonly buckets = toSignal(
+    toObservable(this.libraryFilterService.selectedLibrary).pipe(
+      switchMap(libraryId => this.libraryStatsService.aggregate('language', libraryId).pipe(catchError(() => of([]))))
+    ),
+    {initialValue: []}
+  );
 
   public readonly chartType = 'pie' as const;
-  public readonly languageStats = computed(() => this.calculateLanguageStats(this.filteredBooks()));
-  public readonly totalBooks = computed(() => this.filteredBooks().length);
+  public readonly languageStats = computed(() => this.calculateLanguageStats());
+  public readonly totalBooks = computed(() => this.buckets().reduce((sum, b) => sum + b.count, 0));
   public readonly booksWithLanguage = computed(() => this.languageStats().reduce((sum, s) => sum + s.count, 0));
 
   public readonly chartOptions: ChartConfiguration<'pie'>['options'] = {
@@ -119,21 +119,17 @@ export class LanguageChartComponent {
     };
   });
 
-  private filterBooksByLibrary(books: Book[], selectedLibraryId: number | null): Book[] {
-    return selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
-  }
-
-  private calculateLanguageStats(books: Book[]): LanguageStats[] {
+  // The server groups by raw metadata.language; re-merge equivalent tags (e.g. "en"/"eng"/"English")
+  // client-side the same way the pre-migration per-book loop did, via the resolver's tag.
+  private calculateLanguageStats(): LanguageStats[] {
     const languageCounts = new Map<string, number>();
 
-    books.forEach(book => {
-      const language = book.metadata?.language?.trim();
+    this.buckets().forEach(bucket => {
+      const language = bucket.value?.trim();
       if (language) {
         const resolved = this.languageResolver.resolve(language);
         const normalizedKey = resolved?.tag ?? language.toLowerCase();
-        languageCounts.set(normalizedKey, (languageCounts.get(normalizedKey) || 0) + 1);
+        languageCounts.set(normalizedKey, (languageCounts.get(normalizedKey) || 0) + bucket.count);
       }
     });
 
