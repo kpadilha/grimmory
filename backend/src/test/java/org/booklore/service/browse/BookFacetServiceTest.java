@@ -10,14 +10,20 @@ import org.booklore.model.dto.Library;
 import org.booklore.model.dto.browse.FacetGroupsResponse;
 import org.booklore.model.dto.browse.FacetGroupsResponse.FacetGroup;
 import org.booklore.model.dto.browse.FacetGroupsResponse.FacetLink;
+import org.booklore.model.dto.browse.FacetValueBookIds;
 import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookLoreUserEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.CategoryEntity;
+import org.booklore.model.entity.ComicCreatorEntity;
+import org.booklore.model.entity.ComicCreatorMappingEntity;
+import org.booklore.model.entity.ComicMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.model.enums.ComicCreatorRole;
 import org.booklore.service.task.TaskCronService;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
@@ -138,6 +144,76 @@ class BookFacetServiceTest {
         BookMetadataEntity metadata = BookMetadataEntity.builder().book(bookEntity).title(title).seriesName(seriesName).build();
         em.persist(metadata);
         bookEntity.setMetadata(metadata);
+    }
+
+    private BookMetadataEntity bookWithMetadata(String title) {
+        BookEntity bookEntity = BookEntity.builder()
+                .library(library).libraryPath(libraryPath).addedOn(Instant.now()).deleted(false).build();
+        em.persist(bookEntity);
+        BookMetadataEntity metadata = BookMetadataEntity.builder().book(bookEntity).title(title).build();
+        em.persist(metadata);
+        bookEntity.setMetadata(metadata);
+        return metadata;
+    }
+
+    // metadataMatchScore lives on BookEntity, not BookMetadataEntity - unlike the rating fields.
+    private void bookWithMatchScore(String title, float score) {
+        BookEntity bookEntity = BookEntity.builder()
+                .library(library).libraryPath(libraryPath).addedOn(Instant.now()).deleted(false)
+                .metadataMatchScore(score).build();
+        em.persist(bookEntity);
+        BookMetadataEntity metadata = BookMetadataEntity.builder().book(bookEntity).title(title).build();
+        em.persist(metadata);
+        bookEntity.setMetadata(metadata);
+    }
+
+    private BookEntity physicalBook(String title) {
+        BookEntity bookEntity = BookEntity.builder()
+                .library(library).libraryPath(libraryPath).addedOn(Instant.now()).deleted(false).isPhysical(true).build();
+        em.persist(bookEntity);
+        BookMetadataEntity metadata = BookMetadataEntity.builder().book(bookEntity).title(title).build();
+        em.persist(metadata);
+        bookEntity.setMetadata(metadata);
+        return bookEntity;
+    }
+
+    private BookMetadataEntity bookWithFile(String title, BookFileType type, Long fileSizeKb) {
+        BookEntity bookEntity = BookEntity.builder()
+                .library(library).libraryPath(libraryPath).addedOn(Instant.now()).deleted(false).build();
+        em.persist(bookEntity);
+        BookMetadataEntity metadata = BookMetadataEntity.builder().book(bookEntity).title(title).build();
+        em.persist(metadata);
+        bookEntity.setMetadata(metadata);
+        BookFileEntity file = BookFileEntity.builder()
+                .book(bookEntity).fileName(title).fileSubPath("").isBookFormat(true)
+                .bookType(type).fileSizeKb(fileSizeKb).build();
+        em.persist(file);
+        return metadata;
+    }
+
+    private BookMetadataEntity bookWithComicCreator(String title, String creatorName, ComicCreatorRole... roles) {
+        BookEntity bookEntity = BookEntity.builder()
+                .library(library).libraryPath(libraryPath).addedOn(Instant.now()).deleted(false).build();
+        em.persist(bookEntity);
+        BookMetadataEntity metadata = BookMetadataEntity.builder().book(bookEntity).title(title).build();
+        em.persist(metadata);
+        bookEntity.setMetadata(metadata);
+
+        ComicMetadataEntity comicMetadata = ComicMetadataEntity.builder().bookId(metadata.getBookId()).build();
+        em.persist(comicMetadata);
+        metadata.setComicMetadata(comicMetadata);
+
+        ComicCreatorEntity creator = ComicCreatorEntity.builder().name(creatorName).build();
+        em.persist(creator);
+        java.util.Set<ComicCreatorMappingEntity> mappings = new java.util.HashSet<>();
+        for (ComicCreatorRole role : roles) {
+            ComicCreatorMappingEntity mapping = ComicCreatorMappingEntity.builder()
+                    .comicMetadata(comicMetadata).creator(creator).role(role).build();
+            em.persist(mapping);
+            mappings.add(mapping);
+        }
+        comicMetadata.setCreatorMappings(mappings);
+        return metadata;
     }
 
     private CategoryEntity category(String name) {
@@ -449,5 +525,107 @@ class BookFacetServiceTest {
         assertThat(json).contains("\"rel\":[\"self\",\"facet\"]");
         assertThat(json).doesNotContain("\"rel\":[\"self\"]");
         assertThat(json).doesNotContain("\"rel\":[\"facet\"]");
+    }
+
+    @Test
+    void amazonRatingBucketsIntoRangesNotExactValues() {
+        bookWithMetadata("Low").setAmazonRating(0.5);
+        bookWithMetadata("High").setAmazonRating(4.7);
+        em.flush();
+
+        FacetGroup ratings = group(facetService.getFacets(null, null, null), "amazon_rating");
+
+        assertThat(ratings.links()).extracting(FacetLink::value).containsExactlyInAnyOrder("0", "5");
+        assertThat(count(ratings, "0")).isEqualTo(1);
+        assertThat(count(ratings, "5")).isEqualTo(1);
+    }
+
+    // The same bucket table backs counting and the click-through filter (BookFacetRegistry) - a
+    // book right on a bucket boundary must count under the higher bucket in both places.
+    @Test
+    void amazonRatingBucketBoundaryIsInclusiveOnTheLowerEdge() {
+        BookMetadataEntity metadata = bookWithMetadata("Boundary");
+        metadata.setAmazonRating(4.0);
+        metadata.setAuthors(List.of(author("Boundary Author")));
+        em.flush();
+
+        FacetGroup ratings = group(facetService.getFacets(null, null, null), "amazon_rating");
+        assertThat(count(ratings, "3")).isNull();
+        assertThat(count(ratings, "4")).isEqualTo(1);
+
+        // BookFacetRegistry.numericBucket must parse bucket id "4" into the same [4, 4.5) range
+        // the count above used, otherwise selecting this bucket on /books/page would 0-match it.
+        assertThat(group(facetService.getFacets(List.of("amazon_rating:4"), null, null), "author").links())
+                .extracting(FacetLink::value).containsExactly("Boundary Author");
+        assertThat(group(facetService.getFacets(List.of("amazon_rating:3"), null, null), "author").links())
+                .isEmpty();
+    }
+
+    @Test
+    void matchScorePageCountAndFileSizeBucketIntoTheirOwnRanges() {
+        bookWithMatchScore("Scored", 0.4f);
+        bookWithMetadata("Long").setPageCount(1200);
+        bookWithFile("Big", BookFileType.EPUB, 3_000_000L);
+        em.flush();
+
+        FacetGroupsResponse response = facetService.getFacets(null, null, null);
+        assertThat(count(group(response, "match_score"), "5")).isEqualTo(1);
+        assertThat(count(group(response, "page_count"), "6")).isEqualTo(1);
+        assertThat(count(group(response, "file_size"), "7")).isEqualTo(1);
+    }
+
+    @Test
+    void fileTypeGivesPhysicalBooksTheirOwnBucket() {
+        physicalBook("Paperback");
+        bookWithFile("Ebook", BookFileType.EPUB, 1000L);
+        em.flush();
+
+        FacetGroup fileType = group(facetService.getFacets(null, null, null), "file_type");
+
+        assertThat(count(fileType, "PHYSICAL")).isEqualTo(1);
+        assertThat(count(fileType, "EPUB")).isEqualTo(1);
+    }
+
+    @Test
+    void physicalFilterMatchesOnlyPhysicalBooks() {
+        physicalBook("Paperback");
+        bookWithFile("Ebook", BookFileType.EPUB, 1000L);
+        em.flush();
+
+        FacetGroupsResponse response = facetService.getFacets(List.of("file_type:PHYSICAL"), null, null);
+        assertThat(group(response, "file_type").links())
+                .filteredOn(l -> l.rel().contains("self"))
+                .extracting(FacetLink::value)
+                .containsExactly("PHYSICAL");
+    }
+
+    @Test
+    void comicCreatorGroupsByNameAndRoleSeparately() {
+        bookWithComicCreator("Issue 1", "Jack Kirby", ComicCreatorRole.PENCILLER, ComicCreatorRole.INKER);
+        em.flush();
+
+        FacetGroup creators = group(facetService.getFacets(null, null, null), "comic_creator");
+
+        assertThat(creators.links()).extracting(FacetLink::value)
+                .containsExactlyInAnyOrder("Jack Kirby:penciller", "Jack Kirby:inker");
+        assertThat(count(creators, "Jack Kirby:penciller")).isEqualTo(1);
+        assertThat(count(creators, "Jack Kirby:inker")).isEqualTo(1);
+    }
+
+    @Test
+    void facetValueBookIdsIsExhaustiveAndNeverCapped() {
+        book("A", "Horror", "Alice");
+        book("B", "Horror", "Bob");
+        book("C", "Romance", "Alice");
+        em.flush();
+
+        Map<String, List<FacetValueBookIds>> result = facetService.getFacetValueBookIds(List.of("author", "genre"));
+
+        List<FacetValueBookIds> authors = result.get("author");
+        FacetValueBookIds alice = authors.stream().filter(f -> f.value().equals("Alice")).findFirst().orElseThrow();
+        assertThat(alice.bookIds()).hasSize(2);
+
+        List<FacetValueBookIds> genres = result.get("genre");
+        assertThat(genres).extracting(FacetValueBookIds::value).containsExactlyInAnyOrder("Horror", "Romance");
     }
 }

@@ -117,9 +117,10 @@ describe('BookFilterService', () => {
     expect(signals.shelf()).toEqual([{value: {id: 5, name: 'Favourites'}, bookCount: 2}]);
   });
 
-  it('leaves a range-bucketed filter type empty rather than mis-shaping raw facet values', async () => {
+  it('resolves a range-bucketed filter type into its RangeConfig label and sort order', async () => {
     const {service} = createService({
-      facets: [facetGroup('file_size', [{value: '2048', count: 1}]), facetGroup('page_count', [{value: '312', count: 1}])],
+      // Bucket id '1' is FILE_SIZE_RANGES[1] ('1–10 MB'); PAGE_COUNT_RANGES[6] ('1000+ pages').
+      facets: [facetGroup('file_size', [{value: '1', count: 1}]), facetGroup('page_count', [{value: '6', count: 1}])],
     });
 
     const signals = TestBed.runInInjectionContext(() => service.createFilterSignals(
@@ -129,9 +130,26 @@ describe('BookFilterService', () => {
     await resolveQueries();
     TestBed.flushEffects();
 
-    expect(signals.fileSize()).toEqual([]);
-    expect(signals.pageCount()).toEqual([]);
+    expect(signals.fileSize()).toEqual([{value: {id: 1, name: '1–10 MB', sortIndex: 1}, bookCount: 1}]);
+    expect(signals.pageCount()).toEqual([{value: {id: 6, name: '1000+ pages', sortIndex: 6}, bookCount: 1}]);
     expect(signals.matchScore()).toEqual([]);
+  });
+
+  it('expands a comic_creator "name:role" facet value into a "Name (Role)" label', async () => {
+    const {service} = createService({
+      facets: [facetGroup('comic_creator', [{value: 'Jack Kirby:penciller', count: 3}])],
+    });
+
+    const signals = TestBed.runInInjectionContext(() => service.createFilterSignals(
+      signal(null), signal(EntityType.ALL_BOOKS), signal(null), signal('and')
+    ));
+    TestBed.flushEffects();
+    await resolveQueries();
+    TestBed.flushEffects();
+
+    expect(signals.comicCreator()).toEqual([
+      {value: {id: 'Jack Kirby:penciller', name: 'Jack Kirby (Penciller)'}, bookCount: 3},
+    ]);
   });
 
   it('scopes the facets request to the current route entity', async () => {

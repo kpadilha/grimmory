@@ -1,4 +1,4 @@
-import {Component, effect, inject, OnDestroy, OnInit, signal} from '@angular/core';
+import {Component, inject, OnDestroy, OnInit, signal} from '@angular/core';
 import {Tab, TabList, TabPanel, TabPanels, Tabs} from '@openng/optimus-ui/tabs';
 import {TableModule} from '@openng/optimus-ui/table';
 import {Button} from '@openng/optimus-ui/button';
@@ -7,9 +7,8 @@ import {InputText} from '@openng/optimus-ui/inputtext';
 import {Dialog} from '@openng/optimus-ui/dialog';
 import {ConfirmationService, MessageService} from '@openng/optimus-ui/api';
 import {PageTitleService} from "../../../../shared/service/page-title.service";
-import {BookService} from '../../../book/service/book.service';
 import {BookMetadataManageService} from '../../../book/service/book-metadata-manage.service';
-import {Book} from '../../../book/model/book.model';
+import {FacetValueBookIds, MetadataValuesService} from './metadata-values.service';
 import {FormsModule} from '@angular/forms';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {IconField} from '@openng/optimus-ui/iconfield';
@@ -64,7 +63,7 @@ interface TabConfig {
   styleUrls: ['./metadata-manager.component.scss']
 })
 export class MetadataManagerComponent implements OnInit, OnDestroy {
-  private bookService = inject(BookService);
+  private metadataValuesService = inject(MetadataValuesService);
   private bookMetadataManageService = inject(BookMetadataManageService);
   private messageService = inject(MessageService);
   private router = inject(Router);
@@ -72,19 +71,19 @@ export class MetadataManagerComponent implements OnInit, OnDestroy {
   private pageTitle = inject(PageTitleService);
   private readonly t = inject(TranslocoService);
 
+  // Maps each tab to the /books/facets/values key it aggregates by - author/genre/... rather
+  // than authors/categories/... since that's the vocabulary the facet endpoints share.
+  private static readonly FACET_KEYS: Readonly<Record<MetadataType, string>> = {
+    authors: 'author',
+    categories: 'genre',
+    moods: 'mood',
+    tags: 'tag',
+    series: 'series',
+    publishers: 'publisher',
+    languages: 'language',
+  };
+
   private routeSub!: Subscription;
-  private readonly syncMetadataEffect = effect(() => {
-    const isLoading = this.bookService.isBooksLoading();
-    this.loading.set(isLoading);
-
-    if (isLoading) {
-      return;
-    }
-
-    // NOT migrated: merge/rename/delete need each value's full bookIds list, which no facet
-    // or /books/page combination gives - needs a bucketed {value -> bookIds} backend aggregate.
-    this.extractMetadata(this.bookService.books());
-  });
 
   authors: MetadataItem[] = [];
   categories: MetadataItem[] = [];
@@ -159,6 +158,7 @@ export class MetadataManagerComponent implements OnInit, OnDestroy {
       }
       this.updatePageTitle();
     });
+    this.loadMetadata();
   }
 
   updatePageTitle() {
@@ -171,60 +171,27 @@ export class MetadataManagerComponent implements OnInit, OnDestroy {
     this.routeSub.unsubscribe();
   }
 
-  private extractMetadata(books: Book[]) {
-    const authorsMap = new Map<string, Set<number>>();
-    const categoriesMap = new Map<string, Set<number>>();
-    const moodsMap = new Map<string, Set<number>>();
-    const tagsMap = new Map<string, Set<number>>();
-    const seriesMap = new Map<string, Set<number>>();
-    const publishersMap = new Map<string, Set<number>>();
-    const languagesMap = new Map<string, Set<number>>();
-
-    books.forEach(book => {
-      if (book.metadata) {
-        this.addToMap(authorsMap, book.metadata.authors, book.id);
-        this.addToMap(categoriesMap, book.metadata.categories, book.id);
-        this.addToMap(moodsMap, book.metadata.moods, book.id);
-        this.addToMap(tagsMap, book.metadata.tags, book.id);
-        if (book.metadata.seriesName) {
-          this.addToMap(seriesMap, [book.metadata.seriesName], book.id);
-        }
-        if (book.metadata.publisher) {
-          this.addToMap(publishersMap, [book.metadata.publisher], book.id);
-        }
-        if (book.metadata.language) {
-          this.addToMap(languagesMap, [book.metadata.language], book.id);
-        }
-      }
-    });
-
-    this.authors = this.mapToItems(authorsMap);
-    this.categories = this.mapToItems(categoriesMap);
-    this.moods = this.mapToItems(moodsMap);
-    this.tags = this.mapToItems(tagsMap);
-    this.series = this.mapToItems(seriesMap);
-    this.publishers = this.mapToItems(publishersMap);
-    this.languages = this.mapToItems(languagesMap);
+  // Each value's exhaustive bookIds list (needed for merge/rename/delete) comes from the
+  // facets/values aggregate, not from loading every book client-side.
+  private loadMetadata(): void {
+    this.loading.set(true);
+    const facetKeys = Object.values(MetadataManagerComponent.FACET_KEYS);
+    this.metadataValuesService.fetch(facetKeys)
+      .then(result => {
+        this.authors = this.mapToItems(result[MetadataManagerComponent.FACET_KEYS.authors]);
+        this.categories = this.mapToItems(result[MetadataManagerComponent.FACET_KEYS.categories]);
+        this.moods = this.mapToItems(result[MetadataManagerComponent.FACET_KEYS.moods]);
+        this.tags = this.mapToItems(result[MetadataManagerComponent.FACET_KEYS.tags]);
+        this.series = this.mapToItems(result[MetadataManagerComponent.FACET_KEYS.series]);
+        this.publishers = this.mapToItems(result[MetadataManagerComponent.FACET_KEYS.publishers]);
+        this.languages = this.mapToItems(result[MetadataManagerComponent.FACET_KEYS.languages]);
+      })
+      .finally(() => this.loading.set(false));
   }
 
-  private addToMap(map: Map<string, Set<number>>, values: string[] | undefined, bookId: number) {
-    if (!values) return;
-    values.forEach(value => {
-      if (!map.has(value)) {
-        map.set(value, new Set());
-      }
-      map.get(value)!.add(bookId);
-    });
-  }
-
-  private mapToItems(map: Map<string, Set<number>>): MetadataItem[] {
-    return Array.from(map.entries())
-      .map(([value, bookIds]) => ({
-        value,
-        count: bookIds.size,
-        bookIds: Array.from(bookIds),
-        selected: false
-      }))
+  private mapToItems(values: FacetValueBookIds[] | undefined): MetadataItem[] {
+    return (values ?? [])
+      .map(v => ({value: v.value, count: v.bookIds.length, bookIds: v.bookIds, selected: false}))
       .sort((a, b) => b.count - a.count);
   }
 
@@ -342,7 +309,7 @@ export class MetadataManagerComponent implements OnInit, OnDestroy {
         this.currentRenameItem = null;
         this.renameTarget = '';
         this.mergingInProgress.set(false);
-        this.loading.set(false);
+        this.loadMetadata();
       },
       error: (error) => {
         this.messageService.add({
@@ -417,7 +384,7 @@ export class MetadataManagerComponent implements OnInit, OnDestroy {
         this.mergeTarget = '';
         this.clearSelection(this.currentMergeType);
         this.mergingInProgress.set(false);
-        this.loading.set(false);
+        this.loadMetadata();
       },
       error: (error) => {
         this.messageService.add({
@@ -472,7 +439,7 @@ export class MetadataManagerComponent implements OnInit, OnDestroy {
         this.currentDeleteItem = null;
         this.clearSelection(this.currentMergeType);
         this.deletingInProgress.set(false);
-        this.loading.set(false);
+        this.loadMetadata();
       },
       error: (error) => {
         this.messageService.add({

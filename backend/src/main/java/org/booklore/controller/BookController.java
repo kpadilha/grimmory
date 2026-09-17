@@ -27,6 +27,7 @@ import org.booklore.service.book.PhysicalBookService;
 import org.booklore.service.browse.BookBrowseService;
 import org.booklore.service.browse.BookFacetService;
 import org.booklore.model.dto.browse.FacetGroupsResponse;
+import org.booklore.model.dto.browse.FacetValueBookIds;
 import org.booklore.service.metadata.BookMetadataService;
 import org.booklore.service.progress.ReadingProgressService;
 import org.booklore.service.recommender.BookRecommendationService;
@@ -51,6 +52,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.io.IOException;
 
@@ -116,6 +118,14 @@ public class BookController {
             @Parameter(description = "Free-text search applied to the counts")
             @RequestParam(required = false) String query) {
         return ResponseEntity.ok(bookFacetService.getFacets(facet, facetLogic, query));
+    }
+
+    @Operation(summary = "Get book ids per facet value", description = "Exhaustive value -> book id list for the given facet keys, scoped like the other browse endpoints but never capped at 100 values - backs metadata management (merge/rename/delete), which needs every affected book per value.")
+    @ApiResponse(responseCode = "200", description = "Facet value book id lists returned successfully")
+    @GetMapping("/facets/values")
+    public ResponseEntity<Map<String, List<FacetValueBookIds>>> getFacetValueBookIds(
+            @Parameter(description = "Facet keys to aggregate; repeatable") @RequestParam List<String> facet) {
+        return ResponseEntity.ok(bookFacetService.getFacetValueBookIds(facet));
     }
 
     @Operation(summary = "Get matching book ids", description = "Returns every book id matching the given sort, facet, facet_logic, and query parameters, in sort order. For select-all over the current filters.")

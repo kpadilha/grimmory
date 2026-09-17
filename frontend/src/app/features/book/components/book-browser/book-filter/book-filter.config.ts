@@ -258,10 +258,7 @@ export const FILTER_EXTRACTORS: Readonly<Record<Exclude<FilterType, 'library'>, 
     const comic = book.metadata?.comicMetadata;
     if (!comic) return [];
     const creators: FilterValue[] = [];
-    const roleLabels: Record<string, string> = {
-      penciller: 'Penciller', inker: 'Inker', colorist: 'Colorist',
-      letterer: 'Letterer', coverArtist: 'Cover Artist', editor: 'Editor'
-    };
+    const roleLabels = COMIC_ROLE_DISPLAY_LABELS;
     const roles: [string[] | undefined, string][] = [
       [comic.pencillers, 'penciller'],
       [comic.inkers, 'inker'],
@@ -348,6 +345,17 @@ export const COMIC_ROLE_LABEL_KEYS: Readonly<Record<string, string>> = {
   letterer: 'book.filter.comicRoles.letterer',
   coverArtist: 'book.filter.comicRoles.coverArtist',
   editor: 'book.filter.comicRoles.editor'
+};
+
+// English fallback labels for the "name:role" composite the comic_creator facet returns -
+// shared by the client extractor above and BookFilterService's server-facet resolver.
+export const COMIC_ROLE_DISPLAY_LABELS: Readonly<Record<string, string>> = {
+  penciller: 'Penciller',
+  inker: 'Inker',
+  colorist: 'Colorist',
+  letterer: 'Letterer',
+  coverArtist: 'Cover Artist',
+  editor: 'Editor'
 };
 
 export const FILTER_CONFIGS: Readonly<Record<Exclude<FilterType, 'library'>, Omit<FilterConfig, 'extractor'>>> = {
