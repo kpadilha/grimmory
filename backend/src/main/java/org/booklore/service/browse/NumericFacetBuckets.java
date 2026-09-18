@@ -21,14 +21,16 @@ final class NumericFacetBuckets {
             new Bucket("4", 4, 4.5),
             new Bucket("5", 4.5, Double.POSITIVE_INFINITY));
 
+    // metadataMatchScore is stored 0-100 (MetadataMatchService), not 0-1 - matches
+    // LibraryStatsService.METADATA_SCORE_RANGES on the same field.
     static final List<Bucket> MATCH_SCORE = List.of(
-            new Bucket("0", 0.95, Double.POSITIVE_INFINITY),
-            new Bucket("1", 0.90, 0.95),
-            new Bucket("2", 0.80, 0.90),
-            new Bucket("3", 0.70, 0.80),
-            new Bucket("4", 0.50, 0.70),
-            new Bucket("5", 0.30, 0.50),
-            new Bucket("6", 0.00, 0.30));
+            new Bucket("0", 95, Double.POSITIVE_INFINITY),
+            new Bucket("1", 90, 95),
+            new Bucket("2", 80, 90),
+            new Bucket("3", 70, 80),
+            new Bucket("4", 50, 70),
+            new Bucket("5", 30, 50),
+            new Bucket("6", 0, 30));
 
     static final List<Bucket> FILE_SIZE = List.of(
             new Bucket("0", 0, 1024),

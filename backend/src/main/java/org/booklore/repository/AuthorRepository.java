@@ -46,23 +46,45 @@ public interface AuthorRepository extends JpaRepository<AuthorEntity, Long> {
     // Enrichment below is fetched in bulk for a page of author IDs at a time (never per-author
     // loops, never the full author table), replacing what author-browser used to compute by
     // downloading the entire book collection client-side.
+    //
+    // Each has a ...ByLibraryIds sibling that adds the same b.library.id IN :libraryIds filter
+    // findAllWithBookCountByLibraryIds already applies - without it, a non-admin's enrichment
+    // would leak library/category/series/addedOn/progress from books outside their assigned
+    // libraries, for an author who also has books they cannot see.
 
     @Query("SELECT a.id AS authorId, b.library.name AS libraryName FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.book b WHERE a.id IN :authorIds")
     List<AuthorLibraryRow> findLibraryNamesForAuthors(@Param("authorIds") Set<Long> authorIds);
 
+    @Query("SELECT a.id AS authorId, b.library.name AS libraryName FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.book b WHERE a.id IN :authorIds AND b.library.id IN :libraryIds")
+    List<AuthorLibraryRow> findLibraryNamesForAuthorsByLibraryIds(@Param("authorIds") Set<Long> authorIds, @Param("libraryIds") Set<Long> libraryIds);
+
     @Query("SELECT a.id AS authorId, c.name AS categoryName FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.categories c WHERE a.id IN :authorIds")
     List<AuthorCategoryRow> findCategoriesForAuthors(@Param("authorIds") Set<Long> authorIds);
+
+    @Query("SELECT a.id AS authorId, c.name AS categoryName FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.categories c JOIN bm.book b WHERE a.id IN :authorIds AND b.library.id IN :libraryIds")
+    List<AuthorCategoryRow> findCategoriesForAuthorsByLibraryIds(@Param("authorIds") Set<Long> authorIds, @Param("libraryIds") Set<Long> libraryIds);
 
     @Query("SELECT a.id AS authorId, bm.seriesName AS seriesName FROM AuthorEntity a JOIN a.bookMetadataEntityList bm WHERE a.id IN :authorIds AND bm.seriesName IS NOT NULL")
     List<AuthorSeriesRow> findSeriesNamesForAuthors(@Param("authorIds") Set<Long> authorIds);
 
+    @Query("SELECT a.id AS authorId, bm.seriesName AS seriesName FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.book b WHERE a.id IN :authorIds AND bm.seriesName IS NOT NULL AND b.library.id IN :libraryIds")
+    List<AuthorSeriesRow> findSeriesNamesForAuthorsByLibraryIds(@Param("authorIds") Set<Long> authorIds, @Param("libraryIds") Set<Long> libraryIds);
+
     @Query("SELECT a.id AS authorId, b.addedOn AS addedOn FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.book b WHERE a.id IN :authorIds")
     List<AuthorAddedOnRow> findAddedOnForAuthors(@Param("authorIds") Set<Long> authorIds);
+
+    @Query("SELECT a.id AS authorId, b.addedOn AS addedOn FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.book b WHERE a.id IN :authorIds AND b.library.id IN :libraryIds")
+    List<AuthorAddedOnRow> findAddedOnForAuthorsByLibraryIds(@Param("authorIds") Set<Long> authorIds, @Param("libraryIds") Set<Long> libraryIds);
 
     @Query("SELECT a.id AS authorId, p.readStatus AS readStatus, p.lastReadTime AS lastReadTime, p.personalRating AS personalRating " +
             "FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.book b JOIN b.userBookProgress p " +
             "WHERE a.id IN :authorIds AND p.user.id = :userId")
     List<AuthorProgressRow> findProgressForAuthors(@Param("authorIds") Set<Long> authorIds, @Param("userId") Long userId);
+
+    @Query("SELECT a.id AS authorId, p.readStatus AS readStatus, p.lastReadTime AS lastReadTime, p.personalRating AS personalRating " +
+            "FROM AuthorEntity a JOIN a.bookMetadataEntityList bm JOIN bm.book b JOIN b.userBookProgress p " +
+            "WHERE a.id IN :authorIds AND p.user.id = :userId AND b.library.id IN :libraryIds")
+    List<AuthorProgressRow> findProgressForAuthorsByLibraryIds(@Param("authorIds") Set<Long> authorIds, @Param("userId") Long userId, @Param("libraryIds") Set<Long> libraryIds);
 
     interface AuthorBookProjection {
         Long getBookId();

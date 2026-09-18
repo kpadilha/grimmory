@@ -28,6 +28,7 @@ import org.booklore.model.dto.response.LibraryTimelineResponse;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.UserBookProgressEntity;
+import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.ReadStatus;
 import org.booklore.service.browse.BookFilterSpecifications;
 import org.springframework.data.jpa.domain.Specification;
@@ -39,6 +40,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -856,12 +859,15 @@ public class LibraryStatsService {
                 .build();
     }
 
-    // ponytail: sums every is-book-format file rather than resolving the library's format
-    // priority per book (BookEntity#getPrimaryBookFile is Java-side); revisit if a book with
-    // two ebook formats skews the total noticeably.
+    private record SizeFileRow(Long fileId, BookFileType bookType, Long fileSizeKb) {
+    }
+
+    // One row per (book, book-format file) - same shape as the old SUM query - grouped and
+    // reduced to each book's primary file in Java, mirroring BookEntity#getPrimaryBookFile, so
+    // a book with two ebook formats (e.g. EPUB+PDF) is counted once, not once per format.
     private long computeTotalSizeKb(Long libraryId) {
         CriteriaBuilder cb = entityManager.getCriteriaBuilder();
-        CriteriaQuery<Long> cq = cb.createQuery(Long.class);
+        CriteriaQuery<Tuple> cq = cb.createTupleQuery();
         Root<BookEntity> root = cq.from(BookEntity.class);
         var files = root.join("bookFiles", JoinType.LEFT);
         files.on(cb.isTrue(files.get("isBookFormat")));
@@ -871,10 +877,51 @@ public class LibraryStatsService {
         if (basePredicate != null) {
             predicates.add(basePredicate);
         }
+        predicates.add(cb.isNotNull(files.get("id")));
 
-        cq.select(cb.sum(cb.coalesce(files.<Long>get("fileSizeKb"), 0L)));
+        cq.multiselect(
+                root.get("id").alias("bookId"),
+                root.get("library").get("formatPriority").alias("formatPriority"),
+                files.get("id").alias("fileId"),
+                files.get("bookType").alias("bookType"),
+                files.<Long>get("fileSizeKb").alias("fileSizeKb"));
         cq.where(predicates.toArray(Predicate[]::new));
-        Long result = entityManager.createQuery(cq).getSingleResult();
-        return result == null ? 0L : result;
+
+        Map<Long, List<BookFileType>> priorityByBook = new HashMap<>();
+        Map<Long, List<SizeFileRow>> filesByBook = new LinkedHashMap<>();
+        for (Tuple row : entityManager.createQuery(cq).getResultList()) {
+            Long bookId = row.get("bookId", Long.class);
+            filesByBook.computeIfAbsent(bookId, k -> new ArrayList<>())
+                    .add(new SizeFileRow(row.get("fileId", Long.class), (BookFileType) row.get("bookType"), row.get("fileSizeKb", Long.class)));
+            priorityByBook.putIfAbsent(bookId, castFormatPriority(row.get("formatPriority")));
+        }
+
+        long total = 0L;
+        for (Map.Entry<Long, List<SizeFileRow>> entry : filesByBook.entrySet()) {
+            total += primaryFileSizeKb(entry.getValue(), priorityByBook.get(entry.getKey()));
+        }
+        return total;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<BookFileType> castFormatPriority(Object value) {
+        return value == null ? List.of() : (List<BookFileType>) value;
+    }
+
+    private static long primaryFileSizeKb(List<SizeFileRow> files, List<BookFileType> formatPriority) {
+        SizeFileRow primary = null;
+        for (BookFileType format : formatPriority) {
+            primary = files.stream()
+                    .filter(f -> f.bookType() == format)
+                    .min(Comparator.comparingLong(SizeFileRow::fileId))
+                    .orElse(null);
+            if (primary != null) {
+                break;
+            }
+        }
+        if (primary == null) {
+            primary = files.stream().min(Comparator.comparingLong(SizeFileRow::fileId)).orElse(null);
+        }
+        return primary == null || primary.fileSizeKb() == null ? 0L : primary.fileSizeKb();
     }
 }

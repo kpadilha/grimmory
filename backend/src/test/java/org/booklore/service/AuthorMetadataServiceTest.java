@@ -372,6 +372,50 @@ class AuthorMetadataServiceTest {
         assertThat(summary.getAvgPersonalRating()).isEqualTo(4.0);
     }
 
+    // Proves the vulnerability described in review: a non-admin author page must enrich only
+    // from their assigned libraries. Author 5 has books in both the assigned library (9) and an
+    // out-of-scope one; only the *ByLibraryIds queries are stubbed with in-scope data, so if the
+    // service fell back to the unscoped queries (which would see the out-of-scope book too) this
+    // test would fail on the "never called" assertions below, not silently pass with leaked data.
+    @Test
+    void getAllAuthors_nonAdminEnrichmentNeverLeaksOutOfScopeLibraryData() {
+        BookLoreUser.UserPermissions nonAdmin = new BookLoreUser.UserPermissions();
+        nonAdmin.setAdmin(false);
+        Library library = new Library();
+        library.setId(9L);
+        BookLoreUser user = BookLoreUser.builder().id(2L).permissions(nonAdmin).assignedLibraries(List.of(library)).build();
+        when(authenticationService.getAuthenticatedUser()).thenReturn(user);
+
+        Pageable pageable = PageRequest.of(0, 50);
+        AuthorEntity author = authorEntity(5L, "Brandon Sanderson", null);
+        Set<Long> libraryIds = Set.of(9L);
+        Set<Long> pageIds = Set.of(5L);
+        when(authorRepository.findAllWithBookCountByLibraryIds(libraryIds, pageable)).thenReturn(List.of(new Object[]{author, 1L}));
+        when(authorRepository.countAllAuthorsByLibraryIds(libraryIds)).thenReturn(1L);
+        when(fileService.listAuthorIdsWithPhotos()).thenReturn(Set.of());
+
+        when(authorRepository.findLibraryNamesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(List.of(libraryRow(5L, "Main")));
+        when(authorRepository.findCategoriesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(List.of(categoryRow(5L, "Fantasy")));
+        when(authorRepository.findSeriesNamesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(List.of(seriesRow(5L, "Mistborn")));
+        Instant addedOn = Instant.parse("2025-01-01T00:00:00Z");
+        when(authorRepository.findAddedOnForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(List.of(addedOnRow(5L, addedOn)));
+        when(authorRepository.findProgressForAuthorsByLibraryIds(pageIds, 2L, libraryIds)).thenReturn(List.of(progressRow(5L, ReadStatus.READ, addedOn, 5)));
+
+        AuthorSummary summary = service.getAllAuthors(pageable).getContent().get(0);
+
+        assertThat(summary.getLibraryNames()).containsExactly("Main");
+        assertThat(summary.getCategories()).containsExactly("Fantasy");
+        assertThat(summary.getSeriesCount()).isEqualTo(1);
+        assertThat(summary.getLatestAddedOn()).isEqualTo(addedOn);
+        assertThat(summary.getReadCount()).isEqualTo(1);
+
+        verify(authorRepository, never()).findLibraryNamesForAuthors(any());
+        verify(authorRepository, never()).findCategoriesForAuthors(any());
+        verify(authorRepository, never()).findSeriesNamesForAuthors(any());
+        verify(authorRepository, never()).findAddedOnForAuthors(any());
+        verify(authorRepository, never()).findProgressForAuthors(any(), any());
+    }
+
     private void stubEmptyEnrichment(Set<Long> authorIds) {
         lenient().when(authorRepository.findLibraryNamesForAuthors(authorIds)).thenReturn(List.of());
         lenient().when(authorRepository.findCategoriesForAuthors(authorIds)).thenReturn(List.of());

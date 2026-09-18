@@ -563,7 +563,7 @@ class BookFacetServiceTest {
 
     @Test
     void matchScorePageCountAndFileSizeBucketIntoTheirOwnRanges() {
-        bookWithMatchScore("Scored", 0.4f);
+        bookWithMatchScore("Scored", 40f);
         bookWithMetadata("Long").setPageCount(1200);
         bookWithFile("Big", BookFileType.EPUB, 3_000_000L);
         em.flush();

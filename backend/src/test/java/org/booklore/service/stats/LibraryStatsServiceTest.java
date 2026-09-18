@@ -128,6 +128,14 @@ class LibraryStatsServiceTest {
         return bookEntity;
     }
 
+    private void addBookFile(BookEntity book, BookFileType fileType, long fileSizeKb) {
+        BookFileEntity file = BookFileEntity.builder()
+                .book(book).fileName(book.getId() + "-" + fileType + ".bin").fileSubPath("").isBookFormat(true)
+                .bookType(fileType).fileSizeKb(fileSizeKb).build();
+        em.persist(file);
+        book.getBookFiles().add(file);
+    }
+
     private BookEntity bookInOtherLibrary(String title) {
         BookEntity bookEntity = BookEntity.builder()
                 .library(otherLibrary).addedOn(Instant.now()).deleted(false).build();
@@ -176,6 +184,18 @@ class LibraryStatsServiceTest {
 
         assertThat(summary.getTotalBooks()).isEqualTo(2);
         assertThat(summary.getTotalSizeKb()).isEqualTo(2000L);
+    }
+
+    @Test
+    void totalSizeKbCountsOnlyThePrimaryFilePerBook() {
+        BookEntity book = book("A", 100, BookFileType.EPUB);
+        addBookFile(book, BookFileType.PDF, 500L);
+        em.flush();
+
+        LibrarySummary summary = libraryStatsService.summary(null);
+
+        assertThat(summary.getTotalBooks()).isEqualTo(1);
+        assertThat(summary.getTotalSizeKb()).isEqualTo(1000L);
     }
 
     @Test
