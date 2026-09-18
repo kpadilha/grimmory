@@ -8,8 +8,15 @@ import {SeriesCoverBook, SeriesSummary} from '../model/series.model';
 import {AuthService} from '../../../shared/service/auth.service';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {BookQueryService} from '../../book/data/book-query.service';
-import {GLOBAL_FACET_PARAMS} from '../../book/data/book-query-params';
+import {BookCollectionFilterParams, EMPTY_FACET_SELECTION} from '../../book/data/book-query-params';
 import {toFacetDistinctCount} from '../../book/data/book-query.models';
+
+// Only the 'series' group - not the all-groups scan GLOBAL_FACET_PARAMS used to trigger.
+const SERIES_FACET_PARAMS: BookCollectionFilterParams = {
+  facets: EMPTY_FACET_SELECTION,
+  facetLogic: 'and',
+  group: ['series'],
+};
 import {BrowseLink, BrowsePage, BrowsePageMetadata, findBrowsePageLink} from '../../../core/data/browse.models';
 import {mapBrowsePage} from '../../../core/data/browse-response';
 import {abortSignal, QUERY_DEFAULTS} from '../../../core/data/query-transport';
@@ -71,7 +78,7 @@ export class SeriesDataService {
 
   // Sidebar badge count - the server's exact, uncapped COUNT(DISTINCT series), not the full collection.
   private readonly globalFacetsQuery = injectQuery(() => ({
-    ...this.bookQueryService.facets(GLOBAL_FACET_PARAMS),
+    ...this.bookQueryService.facets(SERIES_FACET_PARAMS),
     enabled: !!this.token(),
   }));
 

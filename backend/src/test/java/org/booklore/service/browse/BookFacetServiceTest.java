@@ -317,6 +317,30 @@ class BookFacetServiceTest {
     }
 
     @Test
+    void groupParamComputesOnlyTheRequestedFacet() {
+        book("A", "Horror", "Alice");
+        book("B", "Romance", "Bob");
+        em.flush();
+
+        FacetGroupsResponse response = facetService.getFacets(null, null, null, List.of("genre"));
+
+        assertThat(response.facets()).extracting(g -> g.metadata().key())
+                .containsExactlyInAnyOrder("sort", "genre");
+        assertThat(count(group(response, "genre"), "Horror")).isEqualTo(1);
+    }
+
+    @Test
+    void groupParamAcceptsMultipleKeys() {
+        book("A", "Horror", "Alice");
+        em.flush();
+
+        FacetGroupsResponse response = facetService.getFacets(null, null, null, List.of("genre", "author"));
+
+        assertThat(response.facets()).extracting(g -> g.metadata().key())
+                .containsExactlyInAnyOrder("sort", "genre", "author");
+    }
+
+    @Test
     void includesSortGroup() {
         book("A", "Horror", "Alice");
         em.flush();

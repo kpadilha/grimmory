@@ -21,7 +21,14 @@ import {IconDisplayComponent} from '../../../shared/components/icon-display/icon
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {injectQuery} from '@tanstack/angular-query-experimental';
 import {BookQueryService} from '../../book/data/book-query.service';
-import {GLOBAL_FACET_PARAMS} from '../../book/data/book-query-params';
+import {BookCollectionFilterParams, EMPTY_FACET_SELECTION} from '../../book/data/book-query-params';
+
+// Only the 'genre' group - not the all-groups scan GLOBAL_FACET_PARAMS used to trigger.
+const GENRE_FACET_PARAMS: BookCollectionFilterParams = {
+  facets: EMPTY_FACET_SELECTION,
+  facetLogic: 'and',
+  group: ['genre'],
+};
 import {ShelfService} from '../../book/service/shelf.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {Textarea} from '@openng/optimus-ui/textarea';
@@ -462,7 +469,7 @@ export class MagicShelfComponent implements OnInit {
     }))
   );
   // Distinct category values from the server's 'genre' facet - never the full collection.
-  private readonly categoryFacetQuery = injectQuery(() => this.bookQueryService.facets(GLOBAL_FACET_PARAMS));
+  private readonly categoryFacetQuery = injectQuery(() => this.bookQueryService.facets(GENRE_FACET_PARAMS));
   categoryOptions = computed(() => {
     const genreGroup = this.categoryFacetQuery.data()?.find(group => group.key === 'genre');
 

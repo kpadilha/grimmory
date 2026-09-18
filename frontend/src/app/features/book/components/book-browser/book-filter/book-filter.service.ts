@@ -87,26 +87,28 @@ export class BookFilterService {
     registerLanguageDisplayName(raw => this.languageResolver.displayName(raw) || raw);
   }
 
+  // expandedFilterTypes gates the network fetch per panel: a group is only ever requested once
+  // the user opens its accordion panel, never all ~30 groups on mount.
   createFilterSignals(
     entity: Signal<Library | Shelf | MagicShelf | null>,
     entityType: Signal<EntityType>,
     activeFilters: Signal<Record<string, unknown[]> | null>,
-    filterMode: Signal<BookFilterMode>
+    filterMode: Signal<BookFilterMode>,
+    expandedFilterTypes: Signal<ReadonlySet<FilterType>>,
   ): Record<FilterType, Signal<Filter[]>> {
-    const facetParams = computed(() => ({
+    const baseParams = computed(() => ({
       facets: toFacetValueMap(this.normalizeFilters(activeFilters()), this.entityScope(entity(), entityType())),
       facetLogic: toFacetLogic(filterMode()),
     }));
 
-    // A single self-omitting facets call backs every group: the server excludes a group's own
-    // selection from its own counts, so all 30 panels come from one request instead of one scan
-    // of the full collection per panel.
-    const facetsQuery = injectQuery(() => this.bookQueryService.facets(facetParams()));
-    const facetGroups = computed(() => facetsQuery.data() ?? []);
-
     const signals = {} as Record<FilterType, Signal<Filter[]>>;
     for (const filterType of Object.keys(FILTER_TYPE_TO_FACET_KEY) as FilterType[]) {
-      signals[filterType] = computed(() => this.buildFilters(filterType, facetGroups()));
+      const groupKey = FILTER_TYPE_TO_FACET_KEY[filterType];
+      const facetQuery = injectQuery(() => ({
+        ...this.bookQueryService.facets({...baseParams(), group: [groupKey]}),
+        enabled: expandedFilterTypes().has(filterType),
+      }));
+      signals[filterType] = computed(() => this.buildFilters(filterType, facetQuery.data() ?? []));
     }
     return signals;
   }

@@ -9,8 +9,15 @@ import {API_CONFIG} from '../../../core/config/api-config';
 import {AuthService} from '../../../shared/service/auth.service';
 import {LIBRARIES_QUERY_KEY, libraryFormatCountsQueryKey} from './library-query-keys';
 import {BookQueryService} from '../data/book-query.service';
-import {GLOBAL_FACET_PARAMS} from '../data/book-query-params';
+import {BookCollectionFilterParams, EMPTY_FACET_SELECTION} from '../data/book-query-params';
 import {toFacetCountMap} from '../data/book-query.models';
+
+// Only the 'library' group - not the all-groups scan GLOBAL_FACET_PARAMS used to trigger.
+const LIBRARY_FACET_PARAMS: BookCollectionFilterParams = {
+  facets: EMPTY_FACET_SELECTION,
+  facetLogic: 'and',
+  group: ['library'],
+};
 
 @Injectable({providedIn: 'root'})
 export class LibraryService {
@@ -28,7 +35,7 @@ export class LibraryService {
 
   // Sidebar badge counts - server-side per-library facet counts, not the full collection.
   private readonly globalFacetsQuery = injectQuery(() => ({
-    ...this.bookQueryService.facets(GLOBAL_FACET_PARAMS),
+    ...this.bookQueryService.facets(LIBRARY_FACET_PARAMS),
     enabled: !!this.token(),
   }));
 

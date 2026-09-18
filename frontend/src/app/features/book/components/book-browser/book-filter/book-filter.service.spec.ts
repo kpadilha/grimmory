@@ -1,15 +1,17 @@
-import {signal} from '@angular/core';
+import {computed, signal} from '@angular/core';
 import {TestBed} from '@angular/core/testing';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {provideTanStackQuery, QueryClient} from '@tanstack/angular-query-experimental';
 
 import {BookQueryService} from '../../../data/book-query.service';
+import {BookCollectionFilterParams} from '../../../data/book-query-params';
 import {BookFacetGroup} from '../../../data/book-query.models';
 import {BookService} from '../../../service/book.service';
 import {LibraryService} from '../../../service/library.service';
 import {ShelfService} from '../../../service/shelf.service';
 import {LanguageResolverService} from '../../../../../shared/service/language-resolver.service';
 import {EntityType} from '../book-browser.component';
+import {FilterType} from './book-filter.config';
 import {BookFilterService} from './book-filter.service';
 
 // TanStack's notification manager batches through a real macrotask, which fake timers never
@@ -30,9 +32,15 @@ function facetGroup(key: string, values: {value: string; count?: number}[]): Boo
 }
 
 function createService(options: {facets?: BookFacetGroup[]} = {}) {
-  const facetsSpy = vi.fn(() => ({
-    queryKey: ['books', 'query', 'collection', 'facets', 'harness'] as const,
-    queryFn: () => Promise.resolve(options.facets ?? []),
+  // A group-scoped query key (params.group) so tanstack never collapses two different panels'
+  // fetches into one cache entry - each group is requested, and gated, independently.
+  const requestedGroups: (readonly string[] | undefined)[] = [];
+  const facetsSpy = vi.fn((params: BookCollectionFilterParams) => ({
+    queryKey: ['books', 'query', 'collection', 'facets', params] as const,
+    queryFn: () => {
+      requestedGroups.push(params.group);
+      return Promise.resolve(options.facets ?? []);
+    },
   }));
   // A scoped filter panel must never fall back to the full collection - proven by making
   // the call throw rather than merely spying, so any regression fails loudly.
@@ -53,7 +61,18 @@ function createService(options: {facets?: BookFacetGroup[]} = {}) {
   });
 
   const service = TestBed.inject(BookFilterService);
-  return {service, facetsSpy, booksSpy};
+  return {service, facetsSpy, requestedGroups};
+}
+
+function createSignals(
+  service: BookFilterService,
+  expanded: FilterType[],
+  entity: Parameters<BookFilterService['createFilterSignals']>[0] = signal(null),
+  entityType: Parameters<BookFilterService['createFilterSignals']>[1] = signal(EntityType.ALL_BOOKS),
+) {
+  return TestBed.runInInjectionContext(() => service.createFilterSignals(
+    entity, entityType, signal(null), signal('and'), signal(new Set(expanded)),
+  ));
 }
 
 describe('BookFilterService', () => {
@@ -67,30 +86,54 @@ describe('BookFilterService', () => {
     TestBed.resetTestingModule();
   });
 
-  it('builds every filter signal from a single /books/facets call, never bookService.books()', async () => {
-    const {service, facetsSpy} = createService({
+  it('never requests a group until its panel is expanded', async () => {
+    const {service, requestedGroups} = createService({
       facets: [facetGroup('author', [{value: 'Frank Herbert', count: 3}])],
     });
 
-    const signals = TestBed.runInInjectionContext(() => service.createFilterSignals(
-      signal(null), signal(EntityType.ALL_BOOKS), signal(null), signal('and')
-    ));
+    const signals = createSignals(service, []);
+    TestBed.flushEffects();
+    await resolveQueries();
+    TestBed.flushEffects();
+
+    expect(signals.author()).toEqual([]);
+    expect(requestedGroups).toEqual([]);
+  });
+
+  it('fetches only the expanded group, scoped by its own facet key, never every group at once', async () => {
+    const {service, requestedGroups} = createService({
+      facets: [facetGroup('author', [{value: 'Frank Herbert', count: 3}])],
+    });
+
+    const signals = createSignals(service, ['author']);
     TestBed.flushEffects();
     await resolveQueries();
     TestBed.flushEffects();
 
     expect(signals.author()).toEqual([{value: {id: 'Frank Herbert', name: 'Frank Herbert'}, bookCount: 3}]);
-    expect(facetsSpy).toHaveBeenCalledTimes(1);
+    expect(requestedGroups).toEqual([['author']]);
+    expect(requestedGroups.every(group => (group?.length ?? 0) === 1)).toBe(true);
   });
 
-  it('resolves the read-status label from the raw enum value returned by the server', async () => {
-    const {service} = createService({
-      facets: [facetGroup('read_status', [{value: 'READ', count: 4}, {value: 'UNSET', count: 1}])],
+  it('expanding a second panel adds its group without re-requesting the first', async () => {
+    const {service, requestedGroups} = createService({
+      facets: [
+        facetGroup('author', [{value: 'Frank Herbert', count: 3}]),
+        facetGroup('read_status', [{value: 'READ', count: 4}, {value: 'UNSET', count: 1}]),
+      ],
     });
 
+    const expanded = signal<FilterType[]>(['author']);
     const signals = TestBed.runInInjectionContext(() => service.createFilterSignals(
-      signal(null), signal(EntityType.ALL_BOOKS), signal(null), signal('and')
+      signal(null), signal(EntityType.ALL_BOOKS), signal(null), signal('and'),
+      computed(() => new Set(expanded())),
     ));
+    TestBed.flushEffects();
+    await resolveQueries();
+    TestBed.flushEffects();
+    expect(signals.readStatus()).toEqual([]);
+
+    expanded.set(['author', 'readStatus']);
     TestBed.flushEffects();
     await resolveQueries();
     TestBed.flushEffects();
@@ -99,16 +142,15 @@ describe('BookFilterService', () => {
       {value: {id: 'READ', name: 'Read'}, bookCount: 4},
       {value: {id: 'UNSET', name: 'Unset'}, bookCount: 1},
     ]);
+    expect(requestedGroups.map(g => g?.[0])).toEqual(['author', 'read_status']);
   });
 
-  it('resolves library and shelf names from their own catalogue services, not from a book', async () => {
+  it('resolves library and shelf names from their own catalogue services once expanded', async () => {
     const {service} = createService({
       facets: [facetGroup('library', [{value: '1', count: 10}]), facetGroup('shelf', [{value: '5', count: 2}])],
     });
 
-    const signals = TestBed.runInInjectionContext(() => service.createFilterSignals(
-      signal(null), signal(EntityType.ALL_BOOKS), signal(null), signal('and')
-    ));
+    const signals = createSignals(service, ['library', 'shelf']);
     TestBed.flushEffects();
     await resolveQueries();
     TestBed.flushEffects();
@@ -123,16 +165,13 @@ describe('BookFilterService', () => {
       facets: [facetGroup('file_size', [{value: '1', count: 1}]), facetGroup('page_count', [{value: '6', count: 1}])],
     });
 
-    const signals = TestBed.runInInjectionContext(() => service.createFilterSignals(
-      signal(null), signal(EntityType.ALL_BOOKS), signal(null), signal('and')
-    ));
+    const signals = createSignals(service, ['fileSize', 'pageCount']);
     TestBed.flushEffects();
     await resolveQueries();
     TestBed.flushEffects();
 
     expect(signals.fileSize()).toEqual([{value: {id: 1, name: '1–10 MB', sortIndex: 1}, bookCount: 1}]);
     expect(signals.pageCount()).toEqual([{value: {id: 6, name: '1000+ pages', sortIndex: 6}, bookCount: 1}]);
-    expect(signals.matchScore()).toEqual([]);
   });
 
   it('expands a comic_creator "name:role" facet value into a "Name (Role)" label', async () => {
@@ -140,9 +179,7 @@ describe('BookFilterService', () => {
       facets: [facetGroup('comic_creator', [{value: 'Jack Kirby:penciller', count: 3}])],
     });
 
-    const signals = TestBed.runInInjectionContext(() => service.createFilterSignals(
-      signal(null), signal(EntityType.ALL_BOOKS), signal(null), signal('and')
-    ));
+    const signals = createSignals(service, ['comicCreator']);
     TestBed.flushEffects();
     await resolveQueries();
     TestBed.flushEffects();
@@ -155,12 +192,10 @@ describe('BookFilterService', () => {
   it('scopes the facets request to the current route entity', async () => {
     const {service, facetsSpy} = createService();
 
-    TestBed.runInInjectionContext(() => service.createFilterSignals(
-      signal({id: 9, name: 'Sci-Fi'}), signal(EntityType.LIBRARY), signal(null), signal('and')
-    ));
+    createSignals(service, ['library'], signal({id: 9, name: 'Sci-Fi'}), signal(EntityType.LIBRARY));
     TestBed.flushEffects();
 
-    expect(facetsSpy).toHaveBeenCalledWith({facets: {library: ['9']}, facetLogic: 'and'});
+    expect(facetsSpy).toHaveBeenCalledWith({facets: {library: ['9']}, facetLogic: 'and', group: ['library']});
   });
 
   it('keeps numeric-id coercion for library/shelf-style filter clicks', () => {

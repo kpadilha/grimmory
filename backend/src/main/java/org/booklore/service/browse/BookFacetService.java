@@ -191,6 +191,12 @@ public class BookFacetService {
             .build();
 
     public FacetGroupsResponse getFacets(List<String> facet, String facetLogicParam, String query) {
+        return getFacets(facet, facetLogicParam, query, null);
+    }
+
+    // group narrows FACETS to the requested key(s) - same counting logic per def, just fewer of
+    // them computed, so the lazy-per-group UI never pays for the other ~50 groups it isn't showing.
+    public FacetGroupsResponse getFacets(List<String> facet, String facetLogicParam, String query, List<String> group) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
         Long userId = user.getId();
         boolean isAdmin = user.getPermissions().isAdmin();
@@ -198,13 +204,14 @@ public class BookFacetService {
 
         Map<String, List<String>> facets = BookFilterSpecifications.parseFacets(facet);
         FacetLogic facetLogic = FacetLogic.from(facetLogicParam);
+        List<FacetDef> requestedFacets = selectFacets(group);
 
-        String cacheKey = userId + ":" + ParamsHash.compute(query, facets, facetLogic);
+        String cacheKey = userId + ":" + ParamsHash.compute(query, facets, facetLogic) + ":" + (group == null ? "" : String.join(",", group));
         return cache.get(cacheKey, key -> {
             String preserved = BrowseParams.preserved(facet, facetLogicParam, query);
             List<FacetGroup> groups = new ArrayList<>();
             groups.add(sortGroup(preserved));
-            for (FacetDef def : FACETS) {
+            for (FacetDef def : requestedFacets) {
                 Specification<BookEntity> base = filterSpecifications.base(query, facets, facetLogic, userId, isAdmin, libraryIds, def.key());
                 Long distinctCount = DISTINCT_COUNT_FACETS.contains(def.key()) ? distinctCount(def, base, userId) : null;
                 LookupFacet<?> lookup = LOOKUP_FACETS.get(def.key());
@@ -214,6 +221,16 @@ public class BookFacetService {
             List<Link> links = List.of(Link.json(List.of("self"), href(FACET_PATH, preserved)));
             return new FacetGroupsResponse(links, groups);
         });
+    }
+
+    // Unknown keys are dropped rather than rejected - the endpoint stays additive/tolerant like
+    // the rest of the browse API's facet parsing, and null/empty means "every group" as before.
+    private static List<FacetDef> selectFacets(List<String> group) {
+        if (group == null || group.isEmpty()) {
+            return FACETS;
+        }
+        Set<String> requested = Set.copyOf(group);
+        return FACETS.stream().filter(def -> requested.contains(def.key())).toList();
     }
 
     // Package-private: lets tests reset the shared singleton cache between runs.

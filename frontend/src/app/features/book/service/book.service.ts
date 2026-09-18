@@ -23,8 +23,15 @@ import {
   removeBookQueries,
 } from './book-query-cache';
 import {BookQueryService} from '../data/book-query.service';
-import {GLOBAL_FACET_PARAMS} from '../data/book-query-params';
+import {BookCollectionFilterParams, EMPTY_FACET_SELECTION} from '../data/book-query-params';
 import {bookSummaryToBook, toFacetTotalCount} from '../data/book-query.models';
+
+// Only the 'shelf_status' group - not the all-groups scan GLOBAL_FACET_PARAMS used to trigger.
+const TOTAL_COUNT_FACET_PARAMS: BookCollectionFilterParams = {
+  facets: EMPTY_FACET_SELECTION,
+  facetLogic: 'and',
+  group: ['shelf_status'],
+};
 
 @Injectable({
   providedIn: 'root',
@@ -47,7 +54,7 @@ export class BookService {
   // Sidebar badge counts and the boot-time "all books" total come from server-side facet
   // counts - never the full collection (132k books, ~100 columns each).
   private readonly globalFacetsQuery = injectQuery(() => ({
-    ...this.bookQueryService.facets(GLOBAL_FACET_PARAMS),
+    ...this.bookQueryService.facets(TOTAL_COUNT_FACET_PARAMS),
     enabled: !!this.token(),
   }));
 

@@ -73,19 +73,14 @@ export type SortDirection = BrowseSortDirection;
 
 export const EMPTY_FACET_SELECTION: FacetValueMap = {};
 
-// Unfiltered facet counts (library/shelf/shelf_status/series) back the sidebar badges - server-side
-// counts instead of downloading the whole collection just to .filter().length it client-side.
-export const GLOBAL_FACET_PARAMS: BookCollectionFilterParams = {
-  facets: EMPTY_FACET_SELECTION,
-  facetLogic: 'and',
-};
-
 export type BookSortTerm = BrowseSortTerm<BookQuerySortKey>;
 
 export interface BookCollectionFilterParams {
   query?: string;
   facets: FacetValueMap;
   facetLogic: FacetLogic;
+  // Facet group key(s) to compute; omitted means every group (the expensive all-groups scan).
+  group?: readonly BookQueryFacetKey[];
 }
 
 export interface BookQueryParams extends BookCollectionFilterParams {
@@ -144,11 +139,13 @@ export function normalizeBookCollectionFilterParams(
 ): BookCollectionFilterParams {
   const query = params.query?.trim();
   const facets = normalizeFacetValueMap(params.facets);
+  const group = params.group ? [...new Set(params.group)].sort(compareCodeUnits) : undefined;
 
   return {
     ...(query ? {query} : {}),
     facets,
     facetLogic: params.facetLogic,
+    ...(group?.length ? {group: group as BookQueryFacetKey[]} : {}),
   };
 }
 
@@ -157,6 +154,10 @@ export function toCollectionHttpParams(params: BookCollectionFilterParams): Http
 
   if (params.query) {
     httpParams = httpParams.set('query', params.query);
+  }
+
+  for (const key of params.group ?? []) {
+    httpParams = httpParams.append('group', key);
   }
 
   return appendFacetParams(httpParams, params.facets);

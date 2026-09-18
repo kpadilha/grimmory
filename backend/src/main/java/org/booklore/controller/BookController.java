@@ -119,8 +119,10 @@ public class BookController {
             @Parameter(description = "How facet values combine within a group: and, or, or not")
             @RequestParam(name = "facet_logic", required = false) String facetLogic,
             @Parameter(description = "Free-text search applied to the counts")
-            @RequestParam(required = false) String query) {
-        return ResponseEntity.ok(bookFacetService.getFacets(facet, facetLogic, query));
+            @RequestParam(required = false) String query,
+            @Parameter(description = "Facet group key(s) to compute, e.g. group=author; repeatable, omit for every group")
+            @RequestParam(required = false) List<String> group) {
+        return ResponseEntity.ok(bookFacetService.getFacets(facet, facetLogic, query, group));
     }
 
     @Operation(summary = "Get book ids per facet value", description = "Exhaustive value -> book id list for the given facet keys, scoped like the other browse endpoints but never capped at 100 values - backs metadata management (merge/rename/delete), which needs every affected book per value.")

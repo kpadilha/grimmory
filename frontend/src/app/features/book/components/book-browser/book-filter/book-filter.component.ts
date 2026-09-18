@@ -67,11 +67,17 @@ export class BookFilterComponent {
   private readonly _selectedFilterMode = signal<BookFilterMode>('and');
   readonly selectedFilterMode = this._selectedFilterMode.asReadonly();
 
+  // Panel index -> filter type, so only the groups behind an open accordion panel ever fetch.
+  private readonly expandedFilterTypes = computed(() => new Set(
+    this.expandedPanels().map(i => this.visibleFilterTypes()[i]).filter((t): t is FilterType => !!t)
+  ));
+
   filterSignals: Record<FilterType, Signal<Filter[]>> = this.filterService.createFilterSignals(
     this.entity,
     this.entityType,
     this.activeFilters,
-    this.selectedFilterMode
+    this.selectedFilterMode,
+    this.expandedFilterTypes
   );
   get filterTypes(): FilterType[] {
     return Object.keys(this.filterSignals) as FilterType[];
