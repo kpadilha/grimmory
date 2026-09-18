@@ -75,6 +75,60 @@ public class CoverDetectorServiceTest {
     }
 
     @Test
+    void extractsCoverViaCoverMetaName() throws IOException {
+        byte[] coverBytes = new byte[]{0x21, 0x22, 0x23};
+        String opf = wrapOpf("""
+                    <meta name="cover" content="the-cover"/>
+                    """, """
+                    <item id="the-cover" href="images/cover.jpg" media-type="image/jpeg"/>
+                    """);
+        Path epub = createEpub(opf, "OEBPS/content.opf", coverBytes);
+
+        assertThat(coverDetectorService.detectCoverImage(epub)).isEqualTo(coverBytes);
+    }
+
+    @Test
+    void ignoresCoverMetaPointingAtNonImageItem() throws IOException {
+        // `meta name="cover"` is free to name the XHTML cover page. The page must exist in the
+        // archive for this to bite: otherwise the miss alone would send it down the fallback.
+        byte[] coverBytes = new byte[]{0x31, 0x32, 0x33};
+        byte[] pageBytes = "<html><body><img src=\"../images/cover.jpg\"/></body></html>"
+                .getBytes(StandardCharsets.UTF_8);
+        Path epub = tempDir.resolve("meta_points_at_page.epub");
+        String opf = wrapOpf("""
+                    <meta name="cover" content="cover-page"/>
+                    """, """
+                    <item id="cover-page" href="text/cover.xhtml" media-type="application/xhtml+xml"/>
+                    <item id="cover-img" href="images/cover.jpg" media-type="image/jpeg"/>
+                    """);
+        try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(epub.toFile()))) {
+            zos.putNextEntry(new ZipEntry("mimetype"));
+            zos.write("application/epub+zip".getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry("META-INF/container.xml"));
+            zos.write("""
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                      <rootfiles>
+                        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+                      </rootfiles>
+                    </container>""".getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry("OEBPS/content.opf"));
+            zos.write(opf.getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry("OEBPS/text/cover.xhtml"));
+            zos.write(pageBytes);
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry("OEBPS/images/cover.jpg"));
+            zos.write(coverBytes);
+            zos.closeEntry();
+        }
+
+        assertThat(coverDetectorService.detectCoverImage(epub)).isEqualTo(coverBytes);
+    }
+
+    @Test
     void extractsCoverViaCoverImageProperty() throws IOException {
         byte[] coverBytes = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 0x01, 0x02, 0x03};
         String opf = wrapOpf("", """

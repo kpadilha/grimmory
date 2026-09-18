@@ -22,6 +22,9 @@ import org.xml.sax.SAXException;
 import javax.xml.parsers.ParserConfigurationException;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.*;
@@ -100,6 +103,13 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
     }
 
     private Document getOPFDocumentFromEpub(File epubFile) throws IOException, ParserConfigurationException, SAXException {
+        // The container points at the OPF: reading it from the zip skips parsing the whole book,
+        // which on a large library dominates the scan and can hang on a malformed NCX.
+        Document fromArchive = readOpfFromArchive(epubFile);
+        if (fromArchive != null) {
+            return fromArchive;
+        }
+
         Book book = new EpubReader().readEpubLazy(epubFile.toPath(), "UTF-8");
 
         var opfResource = book.getOpfResource();
@@ -111,6 +121,35 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
         try (var inputStream = opfResource.getInputStream()) {
             return SecureXmlUtils.createSecureDocumentBuilder(true)
                     .parse(inputStream);
+        }
+    }
+
+    /** Null whenever the container is missing or unreadable, so the caller keeps the fallback. */
+    private Document readOpfFromArchive(File epubFile) {
+        try (ZipFile zip = new ZipFile(epubFile)) {
+            ZipEntry container = zip.getEntry("META-INF/container.xml");
+            if (container == null) {
+                return null;
+            }
+            Document containerDoc;
+            try (InputStream in = zip.getInputStream(container)) {
+                containerDoc = SecureXmlUtils.createSecureDocumentBuilder(true).parse(in);
+            }
+            NodeList rootfiles = containerDoc.getElementsByTagNameNS("*", "rootfile");
+            if (rootfiles.getLength() == 0) {
+                return null;
+            }
+            String opfPath = ((Element) rootfiles.item(0)).getAttribute("full-path");
+            ZipEntry opfEntry = opfPath.isEmpty() ? null : zip.getEntry(opfPath);
+            if (opfEntry == null) {
+                return null;
+            }
+            try (InputStream in = zip.getInputStream(opfEntry)) {
+                return SecureXmlUtils.createSecureDocumentBuilder(true).parse(in);
+            }
+        } catch (Exception e) {
+            log.debug("Direct OPF read failed for {}: {}", epubFile.getName(), e.getMessage());
+            return null;
         }
     }
 
