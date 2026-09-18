@@ -354,17 +354,17 @@ public class OpdsFeedService {
         Page<Book> booksPage;
 
         if (magicShelfId != null) {
+            // Magic shelf books come from a Specification query, not the id-query pattern the
+            // other branches use, so it still only sorts the page in hand (not fixed by this change).
             booksPage = magicShelfBookService.getBooksByMagicShelfId(userId, magicShelfId, page - 1, size);
+            booksPage = opdsBookService.applySortOrder(booksPage, sortOrder);
         } else if (author != null && !author.isBlank()) {
-            booksPage = opdsBookService.getBooksByAuthorName(userId, author, page - 1, size);
+            booksPage = opdsBookService.getBooksByAuthorName(userId, author, page - 1, size, sortOrder);
         } else if (series != null && !series.isBlank()) {
-            booksPage = opdsBookService.getBooksBySeriesName(userId, series, page - 1, size);
+            booksPage = opdsBookService.getBooksBySeriesName(userId, series, page - 1, size, sortOrder);
         } else {
-            booksPage = opdsBookService.getBooksPage(userId, query, libraryId, shelfIds, page - 1, size);
+            booksPage = opdsBookService.getBooksPage(userId, query, libraryId, shelfIds, page - 1, size, sortOrder);
         }
-
-        // Apply user's preferred sort order
-        booksPage = opdsBookService.applySortOrder(booksPage, sortOrder);
 
         String feedTitle = determineFeedTitle(libraryId, shelfIds, magicShelfId, author, series);
         String feedId = determineFeedId(libraryId, shelfIds, magicShelfId, author, series);
@@ -401,10 +401,7 @@ public class OpdsFeedService {
         int page = Math.max(1, parseLongParam(request, "page", 1L).intValue());
         int size = Math.min(parseLongParam(request, "size", (long) DEFAULT_PAGE_SIZE).intValue(), MAX_PAGE_SIZE);
 
-        Page<Book> booksPage = opdsBookService.getRecentBooksPage(userId, page - 1, size);
-
-        // Apply user's preferred sort order
-        booksPage = opdsBookService.applySortOrder(booksPage, sortOrder);
+        Page<Book> booksPage = opdsBookService.getRecentBooksPage(userId, page - 1, size, sortOrder);
 
         var feed = new StringBuilder("""
                 <?xml version="1.0" encoding="UTF-8"?>
