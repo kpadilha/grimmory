@@ -278,7 +278,13 @@ public class LibraryStatsService {
 
         CriteriaBuilder.Case<String> caseExpr = cb.selectCase();
         for (RangeDef range : ranges) {
-            caseExpr = caseExpr.when(cb.and(cb.ge(value, range.min()), cb.le(value, range.max())), range.label());
+            // Float.MAX_VALUE is a Java-side "no upper bound" sentinel, not a real column value -
+            // sending it as a literal upper bound makes Hibernate try to coerce it into the
+            // column's own numeric type (e.g. Integer for pageCount) and throw.
+            Predicate condition = range.max() == Float.MAX_VALUE
+                    ? cb.ge(value, range.min())
+                    : cb.and(cb.ge(value, range.min()), cb.le(value, range.max()));
+            caseExpr = caseExpr.when(condition, range.label());
         }
         Expression<String> bucket = caseExpr.otherwise((String) null);
 

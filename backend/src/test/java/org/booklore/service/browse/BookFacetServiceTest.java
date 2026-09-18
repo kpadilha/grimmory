@@ -23,8 +23,11 @@ import org.booklore.model.entity.ComicCreatorMappingEntity;
 import org.booklore.model.entity.ComicMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.model.entity.UserContentRestrictionEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.ComicCreatorRole;
+import org.booklore.model.enums.ContentRestrictionMode;
+import org.booklore.model.enums.ContentRestrictionType;
 import org.booklore.service.task.TaskCronService;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
@@ -678,5 +681,94 @@ class BookFacetServiceTest {
         assertThatThrownBy(() -> facetService.searchFacetValues("not-a-facet", "", 20))
                 .isInstanceOf(APIException.class)
                 .hasMessageContaining("Unknown facet");
+    }
+
+    // Guards the id-grouped fast path in countByLookup(): a book with two authors and two
+    // categories must not inflate either facet's count - each value still reflects exactly the
+    // one book that carries it, not a join fan-out from the other many-to-many association.
+    @Test
+    void multiValueAssociationsDoNotInflateOtherFacetCounts() {
+        BookMetadataEntity metadata = bookWithMetadata("Multi");
+        metadata.setAuthors(List.of(author("Alice"), author("Bob")));
+        metadata.setCategories(java.util.Set.of(category("Horror"), category("Romance")));
+        em.flush();
+
+        FacetGroupsResponse response = facetService.getFacets(null, null, null);
+
+        assertThat(count(group(response, "author"), "Alice")).isEqualTo(1);
+        assertThat(count(group(response, "author"), "Bob")).isEqualTo(1);
+        assertThat(count(group(response, "genre"), "Horror")).isEqualTo(1);
+        assertThat(count(group(response, "genre"), "Romance")).isEqualTo(1);
+    }
+
+    @Test
+    void deletedBooksAreExcludedFromLookupFacetCounts() {
+        book("A", "Horror", "Alice");
+        BookEntity deleted = BookEntity.builder()
+                .library(library).libraryPath(libraryPath).addedOn(Instant.now()).deleted(true).build();
+        em.persist(deleted);
+        BookMetadataEntity deletedMetadata = BookMetadataEntity.builder().book(deleted).title("Gone").build();
+        deletedMetadata.setCategories(java.util.Set.of(category("Horror")));
+        deletedMetadata.setAuthors(List.of(author("Alice")));
+        em.persist(deletedMetadata);
+        deleted.setMetadata(deletedMetadata);
+        em.flush();
+
+        FacetGroupsResponse response = facetService.getFacets(null, null, null);
+
+        assertThat(count(group(response, "genre"), "Horror")).isEqualTo(1);
+        assertThat(count(group(response, "author"), "Alice")).isEqualTo(1);
+    }
+
+    // Admin bypasses both the assigned-library filter and ContentRestriction (BookFilterSpecifications.base),
+    // so facet counts must span every library - proves countByLookup() didn't hardcode a scope.
+    @Test
+    void adminSeesBooksAcrossAllLibrariesInFacetCounts() {
+        LibraryEntity otherLibrary = LibraryEntity.builder().name("Other").icon("book").watch(false)
+                .formatPriority(List.of(BookFileType.EPUB)).build();
+        em.persist(otherLibrary);
+        LibraryPathEntity otherPath = LibraryPathEntity.builder().library(otherLibrary).path("/other").build();
+        em.persist(otherPath);
+        BookEntity otherBook = BookEntity.builder()
+                .library(otherLibrary).libraryPath(otherPath).addedOn(Instant.now()).deleted(false).build();
+        em.persist(otherBook);
+        BookMetadataEntity otherMetadata = BookMetadataEntity.builder().book(otherBook).title("Elsewhere").build();
+        otherMetadata.setAuthors(List.of(author("Carol")));
+        otherMetadata.setCategories(java.util.Set.of(category("SciFi")));
+        em.persist(otherMetadata);
+        otherBook.setMetadata(otherMetadata);
+
+        book("A", "Horror", "Alice");
+        em.flush();
+
+        BookLoreUser.UserPermissions adminPermissions = new BookLoreUser.UserPermissions();
+        adminPermissions.setAdmin(true);
+        when(authenticationService.getAuthenticatedUser()).thenReturn(
+                BookLoreUser.builder().id(userEntity.getId()).permissions(adminPermissions).build());
+
+        FacetGroupsResponse response = facetService.getFacets(null, null, null);
+
+        assertThat(group(response, "author").links()).extracting(FacetLink::value).containsExactlyInAnyOrder("Alice", "Carol");
+        assertThat(group(response, "genre").links()).extracting(FacetLink::value).containsExactlyInAnyOrder("Horror", "SciFi");
+    }
+
+    // A restricted (non-admin) user's ContentRestriction excludes a whole category - the lookup
+    // facet path must honour it exactly like the plain-count path already does for other facets.
+    @Test
+    void contentRestrictionHidesExcludedCategoryFromNonAdminFacetCounts() {
+        book("A", "Horror", "Alice");
+        book("B", "Romance", "Bob");
+        em.persist(UserContentRestrictionEntity.builder()
+                .user(userEntity)
+                .restrictionType(ContentRestrictionType.CATEGORY)
+                .mode(ContentRestrictionMode.EXCLUDE)
+                .value("Romance")
+                .build());
+        em.flush();
+
+        FacetGroupsResponse response = facetService.getFacets(null, null, null);
+
+        assertThat(group(response, "genre").links()).extracting(FacetLink::value).containsExactly("Horror");
+        assertThat(group(response, "author").links()).extracting(FacetLink::value).containsExactly("Alice");
     }
 }

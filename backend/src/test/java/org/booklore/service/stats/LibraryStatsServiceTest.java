@@ -163,6 +163,7 @@ class LibraryStatsServiceTest {
     void bucketsPageCountIntoFixedRanges() {
         book("A", 50, BookFileType.EPUB);
         book("B", 950, BookFileType.EPUB);
+        book("C", 1500, BookFileType.EPUB);
         em.flush();
 
         List<LibraryHistogramBucket> histogram = libraryStatsService.histogram("page_count", null);
@@ -171,6 +172,26 @@ class LibraryStatsServiceTest {
                 .containsExactly("0-100", "101-200", "201-300", "301-500", "501-750", "751-1000", "1000+");
         assertThat(histogram.get(0).getCount()).isEqualTo(1);
         assertThat(histogram.get(5).getCount()).isEqualTo(1);
+        // The open top bucket used to compare an Integer column against a Float.MAX_VALUE
+        // literal, which Hibernate 7 on Java 25 fails to coerce and throws on.
+        assertThat(histogram.get(6).getCount()).isEqualTo(1);
+        assertThat(histogram.get(6).getMax()).isEqualTo(Integer.MAX_VALUE);
+    }
+
+    @Test
+    void bucketsMetadataScoreIncludingTheTopRange() {
+        BookEntity low = book("A", 100, BookFileType.EPUB);
+        low.setMetadataMatchScore(10f);
+        BookEntity top = book("B", 100, BookFileType.EPUB);
+        top.setMetadataMatchScore(100f);
+        em.flush();
+
+        List<LibraryHistogramBucket> histogram = libraryStatsService.histogram("metadata_score", null);
+
+        assertThat(histogram).extracting(LibraryHistogramBucket::getRange)
+                .containsExactly("veryPoor", "poor", "fair", "good", "excellent");
+        assertThat(histogram.get(0).getCount()).isEqualTo(1);
+        assertThat(histogram.get(4).getCount()).isEqualTo(1);
     }
 
     @Test
