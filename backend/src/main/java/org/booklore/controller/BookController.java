@@ -131,11 +131,19 @@ public class BookController {
         return ResponseEntity.ok(bookFacetService.getFacetValueBookIds(facet));
     }
 
-    @Operation(summary = "Get series summaries", description = "Aggregated per-series data (covers, authors, categories, progress) for the series browser grid, scoped like the other browse endpoints.")
-    @ApiResponse(responseCode = "200", description = "Series summaries returned successfully")
+    @Operation(summary = "Get series summaries (paginated)", description = "Aggregated per-series data (covers, authors, categories, progress) for the series browser grid, scoped like the other browse endpoints. Sort/search/status filtering all run server-side; only the requested page's covers and authors are hydrated.")
+    @ApiResponse(responseCode = "200", description = "Page of series summaries returned successfully")
     @GetMapping("/series/summary")
-    public ResponseEntity<List<SeriesSummary>> getSeriesSummaries() {
-        return ResponseEntity.ok(seriesSummaryService.getSeriesSummaries());
+    public ResponseEntity<BrowsePage<SeriesSummary>> getSeriesSummaries(
+            @Parameter(description = "Zero-based page index") @RequestParam(required = false, defaultValue = "0") @Min(0) int page,
+            @Parameter(description = "Page size, capped at 100") @RequestParam(required = false, defaultValue = "24") @Min(1) @Max(100) int size,
+            @Parameter(description = "Sort key: name-asc, name-desc, book-count, progress, recently-read, recently-added")
+            @RequestParam(required = false) String sort,
+            @Parameter(description = "Free-text search across series names")
+            @RequestParam(required = false) String query,
+            @Parameter(description = "Status filter: all, not-started, in-progress, completed, abandoned")
+            @RequestParam(required = false) String status) {
+        return ResponseEntity.ok(seriesSummaryService.getSeriesSummaries(page, size, sort, query, status));
     }
 
     @Operation(summary = "Get matching book ids", description = "Returns every book id matching the given sort, facet, facet_logic, and query parameters, in sort order. For select-all over the current filters.")
