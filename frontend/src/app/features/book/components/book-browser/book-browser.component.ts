@@ -257,7 +257,7 @@ export class BookBrowserComponent implements AfterViewInit {
   // so far (which grows as the user scrolls) - the 'series' facet already totals it server-side
   // under the current filters/scope, so fetch it only when a collapsed card would actually show it.
   private readonly seriesFacetQuery = injectQuery(() => ({
-    ...this.bookQueryService.facets(this.booksQueryParams()),
+    ...this.bookQueryService.facets({...this.booksQueryParams(), group: ['series']}),
     enabled: this.seriesCollapsed() && !this.forceExpandSeries(),
   }));
   private readonly seriesCounts = computed(() =>
