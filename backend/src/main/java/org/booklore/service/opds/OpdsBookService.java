@@ -24,6 +24,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.JpaSort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -68,6 +70,10 @@ public class OpdsBookService {
     }
 
     public Page<Book> getBooksPage(Long userId, String query, Long libraryId, Set<Long> shelfIds, int page, int size) {
+        return getBooksPage(userId, query, libraryId, shelfIds, page, size, OpdsSortOrder.RECENT);
+    }
+
+    public Page<Book> getBooksPage(Long userId, String query, Long libraryId, Set<Long> shelfIds, int page, int size, OpdsSortOrder sortOrder) {
         if (userId == null) {
             throw ApiError.FORBIDDEN.createException("Authentication required");
         }
@@ -82,32 +88,36 @@ public class OpdsBookService {
         if (shelfIds != null && !shelfIds.isEmpty()) {
             validateShelfAccess(shelfIds, user.getId(), isAdmin);
             Page<Book> books = query != null && !query.isBlank()
-                    ? searchByMetadataInShelvesPageInternal(BookUtils.normalizeForSearch(query), userLibraryIds, shelfIds, page, size, userId)
-                    : getBooksByShelfIdsPageInternal(userLibraryIds, shelfIds, page, size, userId);
+                    ? searchByMetadataInShelvesPageInternal(BookUtils.normalizeForSearch(query), userLibraryIds, shelfIds, page, size, userId, sortOrder)
+                    : getBooksByShelfIdsPageInternal(userLibraryIds, shelfIds, page, size, userId, sortOrder);
             return applyBookFilters(books, userId);
         }
 
         if (libraryId != null) {
             validateLibraryAccess(libraryId, userLibraryIds, isAdmin);
             Page<Book> books = query != null && !query.isBlank()
-                    ? searchByMetadataInLibrariesPageInternal(BookUtils.normalizeForSearch(query), Set.of(libraryId), page, size, userId)
-                    : getBooksByLibraryIdsPageInternal(Set.of(libraryId), page, size, userId);
+                    ? searchByMetadataInLibrariesPageInternal(BookUtils.normalizeForSearch(query), Set.of(libraryId), page, size, userId, sortOrder)
+                    : getBooksByLibraryIdsPageInternal(Set.of(libraryId), page, size, userId, sortOrder);
             return applyBookFilters(books, userId);
         }
 
         if (isAdmin) {
             return query != null && !query.isBlank()
-                    ? searchByMetadataPageInternal(BookUtils.normalizeForSearch(query), page, size, null)
-                    : getAllBooksPageInternal(page, size, null);
+                    ? searchByMetadataPageInternal(BookUtils.normalizeForSearch(query), page, size, null, sortOrder)
+                    : getAllBooksPageInternal(page, size, null, sortOrder);
         }
 
         Page<Book> books = query != null && !query.isBlank()
-                ? searchByMetadataInLibrariesPageInternal(BookUtils.normalizeForSearch(query), userLibraryIds, page, size, userId)
-                : getBooksByLibraryIdsPageInternal(userLibraryIds, page, size, userId);
+                ? searchByMetadataInLibrariesPageInternal(BookUtils.normalizeForSearch(query), userLibraryIds, page, size, userId, sortOrder)
+                : getBooksByLibraryIdsPageInternal(userLibraryIds, page, size, userId, sortOrder);
         return applyBookFilters(books, userId);
     }
 
     public Page<Book> getRecentBooksPage(Long userId, int page, int size) {
+        return getRecentBooksPage(userId, page, size, OpdsSortOrder.RECENT);
+    }
+
+    public Page<Book> getRecentBooksPage(Long userId, int page, int size, OpdsSortOrder sortOrder) {
         if (userId == null) {
             throw ApiError.FORBIDDEN.createException("Authentication required");
         }
@@ -117,14 +127,14 @@ public class OpdsBookService {
         BookLoreUser user = bookLoreUserTransformer.toDTO(entity);
 
         if (user.getPermissions().isAdmin()) {
-            return getRecentBooksPageInternal(page, size, null);
+            return getRecentBooksPageInternal(page, size, null, sortOrder);
         }
 
         Set<Long> libraryIds = user.getAssignedLibraries().stream()
                 .map(Library::getId)
                 .collect(Collectors.toSet());
 
-        Page<Book> books = getRecentBooksByLibraryIdsPageInternal(libraryIds, page, size, userId);
+        Page<Book> books = getRecentBooksByLibraryIdsPageInternal(libraryIds, page, size, userId, sortOrder);
         return applyBookFilters(books, userId);
     }
 
@@ -197,7 +207,7 @@ public class OpdsBookService {
         }
     }
 
-    public Page<Book> getBooksByAuthorName(Long userId, String authorName, int page, int size) {
+    public Page<Book> getBooksByAuthorName(Long userId, String authorName, int page, int size, OpdsSortOrder sortOrder) {
         if (userId == null) {
             throw ApiError.FORBIDDEN.createException("Authentication required");
         }
@@ -206,7 +216,7 @@ public class OpdsBookService {
                 .orElseThrow(() -> ApiError.USER_NOT_FOUND.createException(userId));
         BookLoreUser user = bookLoreUserTransformer.toDTO(entity);
 
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         if (user.getPermissions().isAdmin()) {
             Page<Long> idPage = bookOpdsRepository.findBookIdsByAuthorName(authorName, pageable);
@@ -253,7 +263,7 @@ public class OpdsBookService {
         return bookOpdsRepository.findDistinctSeriesByLibraryIds(libraryIds, pageable);
     }
 
-    public Page<Book> getBooksBySeriesName(Long userId, String seriesName, int page, int size) {
+    public Page<Book> getBooksBySeriesName(Long userId, String seriesName, int page, int size, OpdsSortOrder sortOrder) {
         if (userId == null) {
             throw ApiError.FORBIDDEN.createException("Authentication required");
         }
@@ -262,7 +272,9 @@ public class OpdsBookService {
                 .orElseThrow(() -> ApiError.USER_NOT_FOUND.createException(userId));
         BookLoreUser user = bookLoreUserTransformer.toDTO(entity);
 
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+        // Within a single series, RECENT means "series order" (matches the pre-existing
+        // default), not addedOn DESC; explicit sort orders behave as everywhere else.
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSeriesBrowseSort(sortOrder));
 
         if (user.getPermissions().isAdmin()) {
             Page<Long> idPage = bookOpdsRepository.findBookIdsBySeriesName(seriesName, pageable);
@@ -287,8 +299,8 @@ public class OpdsBookService {
         return applyBookFilters(booksPage, userId);
     }
 
-    private Page<Book> getAllBooksPageInternal(int page, int size, Long userId) {
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+    private Page<Book> getAllBooksPageInternal(int page, int size, Long userId, OpdsSortOrder sortOrder) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         Page<Long> idPage = bookOpdsRepository.findBookIds(pageable);
         if (idPage.isEmpty()) {
@@ -299,8 +311,8 @@ public class OpdsBookService {
         return createPageFromEntities(books, idPage, pageable, userId);
     }
 
-    private Page<Book> getRecentBooksPageInternal(int page, int size, Long userId) {
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+    private Page<Book> getRecentBooksPageInternal(int page, int size, Long userId, OpdsSortOrder sortOrder) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         Page<Long> idPage = bookOpdsRepository.findRecentBookIds(pageable);
         if (idPage.isEmpty()) {
@@ -311,8 +323,8 @@ public class OpdsBookService {
         return createPageFromEntities(books, idPage, pageable, userId);
     }
 
-    private Page<Book> getBooksByLibraryIdsPageInternal(Set<Long> libraryIds, int page, int size, Long userId) {
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+    private Page<Book> getBooksByLibraryIdsPageInternal(Set<Long> libraryIds, int page, int size, Long userId, OpdsSortOrder sortOrder) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         Page<Long> idPage = bookOpdsRepository.findBookIdsByLibraryIds(libraryIds, pageable);
         if (idPage.isEmpty()) {
@@ -323,8 +335,8 @@ public class OpdsBookService {
         return createPageFromEntities(books, idPage, pageable, userId);
     }
 
-    private Page<Book> getRecentBooksByLibraryIdsPageInternal(Set<Long> libraryIds, int page, int size, Long userId) {
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+    private Page<Book> getRecentBooksByLibraryIdsPageInternal(Set<Long> libraryIds, int page, int size, Long userId, OpdsSortOrder sortOrder) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         Page<Long> idPage = bookOpdsRepository.findRecentBookIdsByLibraryIds(libraryIds, pageable);
         if (idPage.isEmpty()) {
@@ -335,6 +347,7 @@ public class OpdsBookService {
         return createPageFromEntities(books, idPage, pageable, userId);
     }
 
+    // Dead code: no caller reaches this (see BookOpdsRepository#findBookIdsByShelfId); left as-is.
     private Page<Book> getBooksByShelfIdPageInternal(Long shelfId, int page, int size, Long userId) {
         Pageable pageable = PageRequest.of(Math.max(page, 0), size);
 
@@ -347,8 +360,8 @@ public class OpdsBookService {
         return createPageFromEntities(books, idPage, pageable, userId);
     }
 
-    private Page<Book> getBooksByShelfIdsPageInternal(Set<Long> libraryIds, Set<Long> shelfIds, int page, int size, Long userId) {
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+    private Page<Book> getBooksByShelfIdsPageInternal(Set<Long> libraryIds, Set<Long> shelfIds, int page, int size, Long userId, OpdsSortOrder sortOrder) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         Page<Long> idPage = bookOpdsRepository.findBookIdsByShelfIds(libraryIds, shelfIds, pageable);
         if (idPage.isEmpty()) {
@@ -359,8 +372,8 @@ public class OpdsBookService {
         return createPageFromEntities(books, idPage, pageable, userId);
     }
 
-    private Page<Book> searchByMetadataPageInternal(String text, int page, int size, Long userId) {
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+    private Page<Book> searchByMetadataPageInternal(String text, int page, int size, Long userId, OpdsSortOrder sortOrder) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         Page<Long> idPage = bookOpdsRepository.findBookIdsByMetadataSearch(text, pageable);
         if (idPage.isEmpty()) {
@@ -371,8 +384,8 @@ public class OpdsBookService {
         return createPageFromEntities(books, idPage, pageable, userId);
     }
 
-    private Page<Book> searchByMetadataInLibrariesPageInternal(String text, Set<Long> libraryIds, int page, int size, Long userId) {
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+    private Page<Book> searchByMetadataInLibrariesPageInternal(String text, Set<Long> libraryIds, int page, int size, Long userId, OpdsSortOrder sortOrder) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         Page<Long> idPage = bookOpdsRepository.findBookIdsByMetadataSearchAndLibraryIds(text, libraryIds, pageable);
         if (idPage.isEmpty()) {
@@ -383,8 +396,8 @@ public class OpdsBookService {
         return createPageFromEntities(books, idPage, pageable, userId);
     }
 
-    private Page<Book> searchByMetadataInShelvesPageInternal(String text, Set<Long> libraryIds, Set<Long> shelfIds, int page, int size, Long userId) {
-        Pageable pageable = PageRequest.of(Math.max(page, 0), size);
+    private Page<Book> searchByMetadataInShelvesPageInternal(String text, Set<Long> libraryIds, Set<Long> shelfIds, int page, int size, Long userId, OpdsSortOrder sortOrder) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), size, resolveSort(sortOrder));
 
         Page<Long> idPage = bookOpdsRepository.findBookIdsByMetadataSearchAndShelfIds(text, libraryIds, shelfIds, pageable);
         if (idPage.isEmpty()) {
@@ -480,6 +493,74 @@ public class OpdsBookService {
         return dto;
     }
 
+    // Maps OpdsSortOrder to a DB-level Sort against the m (metadata) / sa (first author, via
+    // @OrderColumn INDEX(sa)=0) aliases every findBookIds* query left-joins; see SORT_JOINS.
+    private static Sort resolveSort(OpdsSortOrder sortOrder) {
+        return switch (sortOrder == null ? OpdsSortOrder.RECENT : sortOrder) {
+            case RECENT -> recentSort();
+            case TITLE_ASC -> titleSort(Sort.Direction.ASC);
+            case TITLE_DESC -> titleSort(Sort.Direction.DESC);
+            case AUTHOR_ASC -> authorSort(Sort.Direction.ASC);
+            case AUTHOR_DESC -> authorSort(Sort.Direction.DESC);
+            case SERIES_ASC -> seriesSort(Sort.Direction.ASC);
+            case SERIES_DESC -> seriesSort(Sort.Direction.DESC);
+            case RATING_ASC -> ratingSort(Sort.Direction.ASC);
+            case RATING_DESC -> ratingSort(Sort.Direction.DESC);
+        };
+    }
+
+    // Browsing a single series pre-existing default was series order, not addedOn; every other
+    // sort order behaves like resolveSort.
+    private static Sort resolveSeriesBrowseSort(OpdsSortOrder sortOrder) {
+        if (sortOrder == null || sortOrder == OpdsSortOrder.RECENT) {
+            return JpaSort.unsafe(Sort.Direction.ASC, "COALESCE(m.seriesNumber, 999999)")
+                    .andUnsafe(Sort.Direction.DESC, "b.addedOn")
+                    .andUnsafe(Sort.Direction.ASC, "b.id");
+        }
+        return resolveSort(sortOrder);
+    }
+
+    private static Sort recentSort() {
+        return Sort.by(Sort.Direction.DESC, "addedOn").and(Sort.by(Sort.Direction.ASC, "id"));
+    }
+
+    private static Sort titleSort(Sort.Direction direction) {
+        return JpaSort.unsafe(direction, "COALESCE(m.title, '')").andUnsafe(Sort.Direction.ASC, "b.id");
+    }
+
+    // sortName (not the raw name) matches the alphabetisation BookSortRegistry already uses.
+    private static Sort authorSort(Sort.Direction direction) {
+        return JpaSort.unsafe(direction, "COALESCE(sa.sortName, '')").andUnsafe(Sort.Direction.ASC, "b.id");
+    }
+
+    // Books without a series always sort after ones with a series, in both directions; a missing
+    // series number sorts last within its series for the same reason.
+    private static Sort seriesSort(Sort.Direction direction) {
+        return JpaSort.unsafe(Sort.Direction.ASC, "CASE WHEN COALESCE(m.seriesName, '') = '' THEN 1 ELSE 0 END")
+                .andUnsafe(direction, "m.seriesName")
+                .andUnsafe(Sort.Direction.ASC, "CASE WHEN m.seriesNumber IS NULL THEN 1 ELSE 0 END")
+                .andUnsafe(direction, "m.seriesNumber")
+                .andUnsafe(Sort.Direction.ASC, "b.id");
+    }
+
+    // Rating is the average of the positive amazon/goodreads/hardcover ratings (mirrors
+    // calculateRating below); NULLIF guards the division when none are positive.
+    private static final String RATING_HAS_VALUE =
+            "CASE WHEN (COALESCE(m.amazonRating,0)>0 OR COALESCE(m.goodreadsRating,0)>0 OR COALESCE(m.hardcoverRating,0)>0) THEN 0 ELSE 1 END";
+    private static final String RATING_VALUE =
+            "(COALESCE(NULLIF(m.amazonRating,0),0)+COALESCE(NULLIF(m.goodreadsRating,0),0)+COALESCE(NULLIF(m.hardcoverRating,0),0))"
+                    + "/NULLIF((CASE WHEN COALESCE(m.amazonRating,0)>0 THEN 1 ELSE 0 END"
+                    + "+CASE WHEN COALESCE(m.goodreadsRating,0)>0 THEN 1 ELSE 0 END"
+                    + "+CASE WHEN COALESCE(m.hardcoverRating,0)>0 THEN 1 ELSE 0 END),0)";
+
+    private static Sort ratingSort(Sort.Direction direction) {
+        return JpaSort.unsafe(Sort.Direction.ASC, RATING_HAS_VALUE)
+                .andUnsafe(direction, RATING_VALUE)
+                .andUnsafe(Sort.Direction.ASC, "b.id");
+    }
+
+    // Retained for the magic-shelf catalog branch only, which queries BookEntity via
+    // Specification (not the id-query pattern above) and still sorts a single page in memory.
     public Page<Book> applySortOrder(Page<Book> booksPage, OpdsSortOrder sortOrder) {
         if (sortOrder == null || sortOrder == OpdsSortOrder.RECENT) {
             return booksPage; // Already sorted by addedOn DESC from repository

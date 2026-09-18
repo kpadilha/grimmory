@@ -154,7 +154,7 @@ class OpdsFeedServiceTest {
                 .build();
 
         Page<Book> page = new PageImpl<>(List.of(book), PageRequest.of(0, 50), 1);
-        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), any(), any(), any(), eq(0), eq(50))).thenReturn(page);
+        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), any(), any(), any(), eq(0), eq(50), eq(OpdsSortOrder.RECENT))).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
 
         String xml = opdsFeedService.generateCatalogFeed(request);
@@ -164,7 +164,7 @@ class OpdsFeedServiceTest {
         assertThat(xml).contains("urn:booklore:book:10");
         assertThat(xml).contains("application/epub+zip");
         assertThat(xml).contains("</feed>");
-        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, null, 0, 50);
+        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, null, 0, 50, OpdsSortOrder.RECENT);
     }
 
     @Test
@@ -189,12 +189,12 @@ class OpdsFeedServiceTest {
                 .build();
 
         Page<Book> page = new PageImpl<>(List.of(book), PageRequest.of(0, 50), 1);
-        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), any(), any(), any(), eq(0), eq(50))).thenReturn(page);
+        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), any(), any(), any(), eq(0), eq(50), eq(OpdsSortOrder.RECENT))).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
 
         String xml = opdsFeedService.generateCatalogFeed(request);
         assertThat(xml).doesNotContain("link rel=\"http://opds-spec.org/image\" href=\"/api/v1/opds/10/cover");
-        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, null, 0, 50);
+        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, null, 0, 50, OpdsSortOrder.RECENT);
     }
 
     @Test
@@ -220,12 +220,12 @@ class OpdsFeedServiceTest {
                 .build();
 
         Page<Book> page = new PageImpl<>(List.of(book), PageRequest.of(0, 50), 1);
-        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), any(), any(), any(), eq(0), eq(50))).thenReturn(page);
+        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), any(), any(), any(), eq(0), eq(50), eq(OpdsSortOrder.RECENT))).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
 
         String xml = opdsFeedService.generateCatalogFeed(request);
         assertThat(xml).contains("link rel=\"http://opds-spec.org/image\" href=\"/api/v1/opds/10/cover");
-        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, null, 0, 50);
+        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, null, 0, 50, OpdsSortOrder.RECENT);
     }
 
     @Test
@@ -251,12 +251,12 @@ class OpdsFeedServiceTest {
                 .build();
 
         Page<Book> page = new PageImpl<>(List.of(book), PageRequest.of(0, 50), 1);
-        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), any(), any(), any(), eq(0), eq(50))).thenReturn(page);
+        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), any(), any(), any(), eq(0), eq(50), eq(OpdsSortOrder.RECENT))).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
 
         String xml = opdsFeedService.generateCatalogFeed(request);
         assertThat(xml).contains("link rel=\"http://opds-spec.org/image\" href=\"/api/v1/opds/10/cover");
-        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, null, 0, 50);
+        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, null, 0, 50, OpdsSortOrder.RECENT);
     }
 
     @Test
@@ -268,7 +268,7 @@ class OpdsFeedServiceTest {
         when(request.getQueryString()).thenReturn(null);
 
         Page<Book> page = new PageImpl<>(Collections.emptyList(), PageRequest.of(0, 50), 0);
-        when(opdsBookService.getBooksPage(any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(page);
+        when(opdsBookService.getBooksPage(any(), any(), any(), any(), anyInt(), anyInt(), any())).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
 
         String xml = opdsFeedService.generateCatalogFeed(request);
@@ -292,14 +292,14 @@ class OpdsFeedServiceTest {
                 .build();
 
         Page<Book> page = new PageImpl<>(List.of(book), PageRequest.of(0, 50), 1);
-        when(opdsBookService.getRecentBooksPage(eq(TEST_USER_ID), eq(0), eq(50))).thenReturn(page);
+        when(opdsBookService.getRecentBooksPage(eq(TEST_USER_ID), eq(0), eq(50), eq(OpdsSortOrder.RECENT))).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
 
         String xml = opdsFeedService.generateRecentFeed(request);
         assertThat(xml).contains("Recent Book");
         assertThat(xml).contains("application/pdf");
         assertThat(xml).contains("</feed>");
-        verify(opdsBookService).getRecentBooksPage(TEST_USER_ID, 0, 50);
+        verify(opdsBookService).getRecentBooksPage(TEST_USER_ID, 0, 50, OpdsSortOrder.RECENT);
     }
 
     @Test
@@ -311,7 +311,7 @@ class OpdsFeedServiceTest {
         when(request.getQueryString()).thenReturn(null);
 
         Page<Book> page = new PageImpl<>(Collections.emptyList(), PageRequest.of(0, 50), 0);
-        when(opdsBookService.getRecentBooksPage(any(), anyInt(), anyInt())).thenReturn(page);
+        when(opdsBookService.getRecentBooksPage(any(), anyInt(), anyInt(), any())).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
 
         String xml = opdsFeedService.generateRecentFeed(request);
@@ -490,7 +490,7 @@ class OpdsFeedServiceTest {
                 .build();
 
         Page<Book> page = new PageImpl<>(List.of(book), PageRequest.of(0, 50), 1);
-        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), isNull(), isNull(), eq(Set.of(10L)), eq(0), eq(50))).thenReturn(page);
+        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), isNull(), isNull(), eq(Set.of(10L)), eq(0), eq(50), eq(OpdsSortOrder.RECENT))).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
         when(opdsBookService.getShelfName(10L)).thenReturn("My Shelf - Shelf");
 
@@ -498,7 +498,7 @@ class OpdsFeedServiceTest {
         assertThat(xml).contains("Shelf Book");
         assertThat(xml).contains("My Shelf - Shelf");
         assertThat(xml).contains("</feed>");
-        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, Set.of(10L), 0, 50);
+        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, Set.of(10L), 0, 50, OpdsSortOrder.RECENT);
     }
 
     @Test
@@ -525,14 +525,14 @@ class OpdsFeedServiceTest {
                 .build();
 
         Page<Book> page = new PageImpl<>(List.of(book), PageRequest.of(0, 50), 1);
-        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), isNull(), isNull(), eq(Set.of(10L, 20L)), eq(0), eq(50))).thenReturn(page);
+        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), isNull(), isNull(), eq(Set.of(10L, 20L)), eq(0), eq(50), eq(OpdsSortOrder.RECENT))).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
 
         String xml = opdsFeedService.generateCatalogFeed(request);
         assertThat(xml).contains("Multi Shelf Book");
         assertThat(xml).contains("Multiple Shelves");
         assertThat(xml).contains("</feed>");
-        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, Set.of(10L, 20L), 0, 50);
+        verify(opdsBookService).getBooksPage(TEST_USER_ID, null, null, Set.of(10L, 20L), 0, 50, OpdsSortOrder.RECENT);
     }
 
     @Test
@@ -559,14 +559,14 @@ class OpdsFeedServiceTest {
                 .build();
 
         Page<Book> page = new PageImpl<>(List.of(book), PageRequest.of(0, 50), 1);
-        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), eq("fantasy"), isNull(), eq(Set.of(10L)), eq(0), eq(50))).thenReturn(page);
+        when(opdsBookService.getBooksPage(eq(TEST_USER_ID), eq("fantasy"), isNull(), eq(Set.of(10L)), eq(0), eq(50), eq(OpdsSortOrder.RECENT))).thenReturn(page);
         when(opdsBookService.applySortOrder(any(), any())).thenReturn(page);
         when(opdsBookService.getShelfName(10L)).thenReturn("Fantasy Shelf - Shelf");
 
         String xml = opdsFeedService.generateCatalogFeed(request);
         assertThat(xml).contains("Fantasy Book");
         assertThat(xml).contains("</feed>");
-        verify(opdsBookService).getBooksPage(TEST_USER_ID, "fantasy", null, Set.of(10L), 0, 50);
+        verify(opdsBookService).getBooksPage(TEST_USER_ID, "fantasy", null, Set.of(10L), 0, 50, OpdsSortOrder.RECENT);
     }
     @Test
     void fileMimeType_shouldReturnCorrectMimeTypeForCbz() throws Exception {
