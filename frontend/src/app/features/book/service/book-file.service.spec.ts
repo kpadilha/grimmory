@@ -9,7 +9,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import type {AdditionalFile, Book, BookMetadata, DetachBookFileResponse} from '../model/book.model';
 import {AdditionalFileType} from '../model/book.model';
-import {BOOKS_QUERY_KEY, bookDetailQueryKey} from './book-query-keys';
+import {bookDetailQueryKey, bookDetailQueryPrefix} from './book-query-keys';
 import {BookFileService} from './book-file.service';
 import {FileDownloadService} from '../../../shared/service/file-download.service';
 import {LocalSettingsService} from '../../../shared/service/local-settings.service';
@@ -146,19 +146,8 @@ describe('BookFileService', () => {
     );
   });
 
-  it('deletes an additional file, patches the cached lists, and shows a success toast', () => {
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [
-      buildBook(7, {
-        alternativeFormats: [buildAdditionalFile(70, {bookId: 7, fileName: 'alt.epub'})],
-        supplementaryFiles: [
-          buildAdditionalFile(71, {
-            bookId: 7,
-            fileName: 'notes.pdf',
-            additionalFileType: AdditionalFileType.SUPPLEMENTARY,
-          }),
-        ],
-      }),
-    ]);
+  it('deletes an additional file, invalidates the cached book detail, and shows a success toast', () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     service.deleteAdditionalFile(7, 71).subscribe();
 
@@ -166,12 +155,8 @@ describe('BookFileService', () => {
     expect(request.request.method).toBe('DELETE');
     request.flush(null);
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([
-      buildBook(7, {
-        alternativeFormats: [buildAdditionalFile(70, {bookId: 7, fileName: 'alt.epub'})],
-        supplementaryFiles: [],
-      }),
-    ]);
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(7)});
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: ['app-books']});
     expect(messageService.add).toHaveBeenCalledWith({
       severity: 'success',
       summary: 'book.bookService.toast.fileDeletedSummary',
@@ -179,16 +164,8 @@ describe('BookFileService', () => {
     });
   });
 
-  it('promotes the next alternative format when deleting the primary book file', () => {
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [
-      buildBook(9, {
-        primaryFile: buildAdditionalFile(90, {bookId: 9, fileName: 'main.epub'}),
-        alternativeFormats: [
-          buildAdditionalFile(91, {bookId: 9, fileName: 'alt-one.pdf', bookType: 'PDF'}),
-          buildAdditionalFile(92, {bookId: 9, fileName: 'alt-two.fb2', bookType: 'FB2'}),
-        ],
-      }),
-    ]);
+  it('invalidates the cached book detail when deleting the primary book file', () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     service.deleteBookFile(9, 90, true).subscribe();
 
@@ -196,14 +173,7 @@ describe('BookFileService', () => {
     expect(request.request.method).toBe('DELETE');
     request.flush(null);
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([
-      buildBook(9, {
-        primaryFile: buildAdditionalFile(91, {bookId: 9, fileName: 'alt-one.pdf', bookType: 'PDF'}),
-        alternativeFormats: [
-          buildAdditionalFile(92, {bookId: 9, fileName: 'alt-two.fb2', bookType: 'FB2'}),
-        ],
-      }),
-    ]);
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(9)});
     expect(messageService.add).toHaveBeenCalledWith({
       severity: 'success',
       summary: 'book.bookService.toast.fileDeletedSummary',
@@ -211,19 +181,9 @@ describe('BookFileService', () => {
     });
   });
 
-  it('surfaces delete failures through an error toast and preserves cached files', () => {
-    const cachedBook = buildBook(11, {
-      supplementaryFiles: [
-        buildAdditionalFile(111, {
-          bookId: 11,
-          fileName: 'appendix.pdf',
-          additionalFileType: AdditionalFileType.SUPPLEMENTARY,
-        }),
-      ],
-    });
+  it('surfaces delete failures through an error toast without invalidating any cache', () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     let thrown: unknown;
-
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [cachedBook]);
 
     service.deleteAdditionalFile(11, 111).subscribe({
       error: error => {
@@ -235,7 +195,7 @@ describe('BookFileService', () => {
     request.flush({message: 'cannot delete'}, {status: 500, statusText: 'Server Error'});
 
     expect(thrown).toBeTruthy();
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([cachedBook]);
+    expect(invalidateSpy).not.toHaveBeenCalled();
     expect(messageService.add).toHaveBeenCalledWith({
       severity: 'error',
       summary: 'book.bookService.toast.fileDeleteFailedSummary',
@@ -243,7 +203,8 @@ describe('BookFileService', () => {
     });
   });
 
-  it('uploads alternative-format files with inferred bookType and patches cached formats', () => {
+  it('uploads alternative-format files with inferred bookType and invalidates the cached book detail', () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     const upload = new File(['epub'], 'edition.epub', {type: 'application/epub+zip'});
     const uploadedFile = buildAdditionalFile(121, {
       bookId: 12,
@@ -251,8 +212,6 @@ describe('BookFileService', () => {
       bookType: 'EPUB',
       additionalFileType: AdditionalFileType.ALTERNATIVE_FORMAT,
     });
-
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [buildBook(12)]);
 
     service.uploadAdditionalFile(12, upload, AdditionalFileType.ALTERNATIVE_FORMAT).subscribe(result => {
       expect(result).toEqual(uploadedFile);
@@ -268,11 +227,7 @@ describe('BookFileService', () => {
 
     request.flush(uploadedFile);
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([
-      buildBook(12, {
-        alternativeFormats: [uploadedFile],
-      }),
-    ]);
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(12)});
     expect(messageService.add).toHaveBeenCalledWith({
       severity: 'success',
       summary: 'book.bookService.toast.fileUploadedSummary',
@@ -280,13 +235,8 @@ describe('BookFileService', () => {
     });
   });
 
-  it('detaches a book file with copyMetadata and patches both returned books in cache', () => {
-    const sourceBook = buildBook(20, {
-      alternativeFormats: [buildAdditionalFile(201, {bookId: 20, fileName: 'source.epub'})],
-    });
-    const placeholderNewBook = buildBook(21, {
-      metadata: {title: 'Placeholder'},
-    });
+  it('detaches a book file with copyMetadata and invalidates both returned books', () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     const response: DetachBookFileResponse = {
       sourceBook: buildBook(20, {alternativeFormats: []}),
       newBook: buildBook(21, {
@@ -294,8 +244,6 @@ describe('BookFileService', () => {
         metadata: {title: 'Detached Copy'},
       }),
     };
-
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [sourceBook, placeholderNewBook]);
 
     service.detachBookFile(20, 201, true).subscribe(result => {
       expect(result).toEqual(response);
@@ -306,7 +254,8 @@ describe('BookFileService', () => {
     expect(request.request.body).toEqual({copyMetadata: true});
     request.flush(response);
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([response.sourceBook, response.newBook]);
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(20)});
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(21)});
     expect(messageService.add).toHaveBeenCalledWith({
       severity: 'success',
       summary: 'metadata.viewer.toast.detachFileSuccessSummary',
@@ -314,10 +263,7 @@ describe('BookFileService', () => {
     });
   });
 
-  it('attaches source book files, updates the target cache entry, and evicts removed books', () => {
-    const targetBook = buildBook(30, {
-      primaryFile: buildAdditionalFile(301, {bookId: 30, fileName: 'target.epub'}),
-    });
+  it('attaches source book files, invalidates the target detail cache, and evicts removed books', () => {
     const sourceBook = buildBook(31, {
       primaryFile: buildAdditionalFile(311, {bookId: 31, fileName: 'source-one.epub'}),
     });
@@ -331,8 +277,8 @@ describe('BookFileService', () => {
         buildAdditionalFile(321, {bookId: 30, fileName: 'source-two.epub'}),
       ],
     });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [targetBook, sourceBook, secondSourceBook]);
     queryClient.setQueryData(bookDetailQueryKey(31, false), sourceBook);
     queryClient.setQueryData(bookDetailQueryKey(32, false), secondSourceBook);
 
@@ -354,7 +300,7 @@ describe('BookFileService', () => {
       deletedSourceBookIds: [31, 32],
     });
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([updatedTargetBook]);
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(30)});
     expect(queryClient.getQueryData(bookDetailQueryKey(31, false))).toBeUndefined();
     expect(queryClient.getQueryData(bookDetailQueryKey(32, false))).toBeUndefined();
     expect(messageService.add).toHaveBeenCalledWith({

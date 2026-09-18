@@ -2,7 +2,7 @@ import {InfiniteData, QueryClient} from '@tanstack/angular-query-experimental';
 
 import {Book, BookMetadata} from '../model/book.model';
 import {AppBookSummary, AppPageResponse} from '../model/app-book.model';
-import {BOOKS_QUERY_KEY, bookDetailQueryPrefix, bookRecommendationsQueryPrefix} from './book-query-keys';
+import {bookDetailQueryPrefix, bookRecommendationsQueryPrefix} from './book-query-keys';
 import {bookQueryKeys} from '../data/book-query-keys';
 
 const APP_BOOKS_QUERY_PREFIX = ['app-books'] as const;
@@ -16,8 +16,6 @@ export function invalidateAppBooksQueries(queryClient: QueryClient): void {
 // --- Full invalidation (refetches from server) ---
 
 export function invalidateBooksQuery(queryClient: QueryClient): void {
-  void queryClient.invalidateQueries({queryKey: BOOKS_QUERY_KEY, exact: true});
-  // Paged/faceted browsing (BookQueryService) is a separate cache family from the legacy full list.
   void queryClient.invalidateQueries({queryKey: bookQueryKeys.collections()});
   void queryClient.invalidateQueries({queryKey: bookQueryKeys.idQueries()});
   invalidateAppBooksQueries(queryClient);
@@ -47,9 +45,6 @@ export function removeBooksFromCache(queryClient: QueryClient, bookIds: Iterable
     return;
   }
 
-  queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, current =>
-    (current ?? []).filter(book => !removedIds.has(book.id))
-  );
   removeBookQueries(queryClient, removedIds);
   invalidateAppBooksQueries(queryClient);
 }
@@ -57,49 +52,25 @@ export function removeBooksFromCache(queryClient: QueryClient, bookIds: Iterable
 // --- Surgical patches (updates cache directly, no list refetch) ---
 
 export function addBookToCache(queryClient: QueryClient, book: Book): void {
-  queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, current => {
-    const books = current ?? [];
-    const exists = books.some(b => b.id === book.id);
-    return exists ? books.map(b => b.id === book.id ? book : b) : [...books, book];
-  });
   invalidateAppBooksQueries(queryClient);
 }
 
 export function patchBooksInCache(queryClient: QueryClient, updatedBooks: Book[]): void {
-  const updatedMap = new Map(updatedBooks.map(book => [book.id, book]));
-  queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, current =>
-    (current ?? []).map(book => updatedMap.get(book.id) ?? book)
-  );
   invalidateBookDetailQueries(queryClient, updatedBooks.map(b => b.id));
   invalidateAppBooksQueries(queryClient);
 }
 
 export function patchBookMetadataInCache(queryClient: QueryClient, bookId: number, metadata: BookMetadata): void {
-  queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, current =>
-    (current ?? []).map(book =>
-      book.id === bookId ? {...book, metadata} : book
-    )
-  );
   invalidateBookDetailQueries(queryClient, [bookId]);
   invalidateAppBooksQueries(queryClient);
 }
 
 export function patchBookInCacheWith(queryClient: QueryClient, bookId: number, updater: (book: Book) => Book): void {
-  queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, current =>
-    (current ?? []).map(book => book.id === bookId ? updater(book) : book)
-  );
   invalidateBookDetailQueries(queryClient, [bookId]);
   invalidateAppBooksQueries(queryClient);
 }
 
 export function patchBookFieldsInCache(queryClient: QueryClient, updates: {bookId: number; fields: Partial<Book>}[]): void {
-  const updateMap = new Map(updates.map(u => [u.bookId, u.fields]));
-  queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, current =>
-    (current ?? []).map(book => {
-      const fields = updateMap.get(book.id);
-      return fields ? {...book, ...fields} : book;
-    })
-  );
   invalidateBookDetailQueries(queryClient, updates.map(u => u.bookId));
   invalidateAppBooksQueries(queryClient);
 }
@@ -135,21 +106,6 @@ export function patchAppBooksCoverInCache(
 }
 
 export function patchAppBooksMetadataLockInCache(queryClient: QueryClient, bookId: number, allMetadataLocked: boolean): void {
-  // Do not create the legacy full-books cache when only the paginated app-books cache exists.
-  queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, current =>
-    current?.map(book =>
-      book.id === bookId
-        ? {
-          ...book,
-          metadata: {
-            ...(book.metadata ?? {bookId}),
-            allMetadataLocked,
-          },
-        }
-        : book
-    ) ?? current
-  );
-
   queryClient.setQueriesData<InfiniteData<AppPageResponse<AppBookSummary>>>(
     {queryKey: APP_BOOKS_QUERY_PREFIX},
     current => {

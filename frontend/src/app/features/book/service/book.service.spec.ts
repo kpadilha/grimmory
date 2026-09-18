@@ -4,30 +4,18 @@ import {Router} from '@angular/router';
 import {TranslocoService} from '@jsverse/transloco';
 import {MessageService} from '@openng/optimus-ui/api';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {firstValueFrom} from 'rxjs';
 
 import {createAuthServiceStub, createQueryClientHarness, flushSignalAndQueryEffects, flushQueryAsync} from '../../../core/testing/query-testing';
 import type {Book, BookMetadata} from '../model/book.model';
-import type {Shelf} from '../model/shelf.model';
 import {AuthService} from '../../../shared/service/auth.service';
 import {BookPatchService} from './book-patch.service';
-import {BOOKS_QUERY_KEY} from './book-query-keys';
 import {BookSocketService} from './book-socket.service';
 import {BookService} from './book.service';
 
 type BuildBookOverrides = Omit<Partial<Book>, 'metadata' | 'shelves'> & {
   metadata?: Partial<BookMetadata>;
-  shelves?: Shelf[];
 };
-
-function buildShelf(id: number, overrides: Partial<Shelf> = {}): Shelf {
-  return {
-    id,
-    name: `Shelf ${id}`,
-    userId: 7,
-    bookCount: 0,
-    ...overrides,
-  };
-}
 
 function buildBook(id: number, overrides: BuildBookOverrides = {}): Book {
   const {metadata, ...bookOverrides} = overrides;
@@ -45,14 +33,21 @@ function buildBook(id: number, overrides: BuildBookOverrides = {}): Book {
   };
 }
 
-async function flushBooksQuery(): Promise<void> {
-  await flushQueryAsync();
+function facetGroupsResponse(groups: Record<string, string[]>) {
+  return {
+    facets: Object.entries(groups).map(([key, values]) => ({
+      metadata: {rel: 'facet', key, title: key},
+      links: values.map(value => ({
+        rel: ['facet'], href: '', type: 'application/json', value, title: value, properties: {numberOfItems: 1},
+      })),
+    })),
+  };
 }
 
 // The sidebar/boot facet counts are eager (cheap, token-gated only) - every test that
 // authenticates picks up this request regardless of whether it cares about the counts.
-function flushFacetsRequest(httpTestingController: HttpTestingController): void {
-  httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets')).flush({facets: []});
+function flushFacetsRequest(httpTestingController: HttpTestingController, groups: Record<string, string[]> = {}): void {
+  httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets')).flush(facetGroupsResponse(groups));
 }
 
 describe('BookService', () => {
@@ -132,52 +127,21 @@ describe('BookService', () => {
 
     flushFacetsRequest(httpTestingController);
     httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
-    expect(service.isBooksLoading()).toBe(false);
   });
 
-  it('fetches books only once something reads books(), then hydrates query-backed state, loading state, and unique metadata', async () => {
+  it('derives uniqueMetadata from the already-fetched facet counts, never the full collection', async () => {
     setup();
-    flushFacetsRequest(httpTestingController);
 
-    const response = [
-      buildBook(1, {
-        metadata: {
-          authors: ['Le Guin', 'Le Guin'],
-          categories: ['Fantasy'],
-          moods: ['Calm'],
-          tags: ['Classic', 'Classic'],
-          publisher: 'Ace',
-          seriesName: 'Earthsea',
-        },
-      }),
-      buildBook(2, {
-        metadata: {
-          authors: ['Pratchett'],
-          categories: ['Fantasy', 'Humor'],
-          moods: ['Calm', 'Funny'],
-          tags: ['Classic', 'Satire'],
-          publisher: 'Corgi',
-          seriesName: 'Discworld',
-        },
-      }),
-    ];
+    flushFacetsRequest(httpTestingController, {
+      author: ['Le Guin', 'Pratchett'],
+      genre: ['Fantasy', 'Humor'],
+      mood: ['Calm', 'Funny'],
+      tag: ['Classic', 'Satire'],
+      publisher: ['Ace', 'Corgi'],
+      series: ['Earthsea', 'Discworld'],
+    });
+    await flushQueryAsync();
 
-    expect(service.books()).toEqual([]);
-    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
-
-    await flushBooksQuery();
-
-    expect(service.isBooksLoading()).toBe(true);
-    expect(service.booksError()).toBeNull();
-
-    const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books'));
-    expect(request.request.method).toBe('GET');
-    request.flush(response);
-    await flushBooksQuery();
-
-    expect(service.books()).toEqual(response);
-    expect(service.findBookById(2)).toEqual(response[1]);
-    expect(service.findBookById(999)).toBeUndefined();
     expect(service.uniqueMetadata()).toEqual({
       authors: ['Le Guin', 'Pratchett'],
       categories: ['Fantasy', 'Humor'],
@@ -186,8 +150,7 @@ describe('BookService', () => {
       publishers: ['Ace', 'Corgi'],
       series: ['Earthsea', 'Discworld'],
     });
-    expect(service.isBooksLoading()).toBe(false);
-    expect(service.booksError()).toBeNull();
+    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
   });
 
   it('resolves a selection by id from /books/batch, never the full collection', async () => {
@@ -213,101 +176,43 @@ describe('BookService', () => {
     await expect(service.getBooksByIds([])).resolves.toEqual([]);
   });
 
-  it('gates loading on both the auth token and demand, fetching once both are present', async () => {
-    setup(null);
-
-    expect(service.books()).toEqual([]);
-    expect(service.isBooksLoading()).toBe(false);
-    expect(service.booksError()).toBeNull();
-    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
-
-    await flushBooksQuery();
-    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
-
-    authService.token.set('token-123');
-    await flushBooksQuery();
-    flushFacetsRequest(httpTestingController);
-
-    const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books'));
-    expect(service.isBooksLoading()).toBe(true);
-    request.flush([buildBook(7)]);
-    await flushBooksQuery();
-
-    expect(service.books()).toEqual([buildBook(7)]);
-    expect(service.isBooksLoading()).toBe(false);
-    expect(service.booksError()).toBeNull();
-  });
-
-  it('surfaces query errors through booksError and clears the loading flag', async () => {
+  it('pages /books/page scoped to the series facet for getBooksInSeries, never the full collection', async () => {
     setup();
     flushFacetsRequest(httpTestingController);
 
-    service.books();
-    await flushBooksQuery();
+    const promise = firstValueFrom(service.getBooksInSeries('Earthsea'));
 
-    const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books'));
-    request.flush({message: 'boom'}, {status: 500, statusText: 'Server Error'});
-    await flushBooksQuery();
+    const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/page'));
+    expect(request.request.params.getAll('facet')).toEqual(['series:Earthsea']);
+    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
 
-    expect(service.books()).toEqual([]);
-    expect(service.isBooksLoading()).toBe(false);
-    expect(service.booksError()).toBe('Failed to load books');
+    request.flush({
+      content: [buildBook(1, {metadata: {seriesName: 'Earthsea'}})],
+      page: {number: 0, size: 100, totalElements: 1, totalPages: 1, cursor: 'c'},
+      links: [],
+    });
+
+    const result = await promise;
+    expect(result.map(book => book.id)).toEqual([1]);
   });
 
-  it('removes a shelf from the cached books query without disturbing other shelf assignments', async () => {
+  it('resolves an empty series without a request', async () => {
     setup();
     flushFacetsRequest(httpTestingController);
 
-    const targetShelf = buildShelf(10, {name: 'Favorites'});
-    const untouchedShelf = buildShelf(11, {name: 'Archive'});
-    const initialBooks = [
-      buildBook(1, {shelves: [targetShelf, untouchedShelf]}),
-      buildBook(2, {shelves: [targetShelf]}),
-    ];
+    await expect(firstValueFrom(service.getBooksInSeries(''))).resolves.toEqual([]);
+  });
 
-    service.books();
-    await flushBooksQuery();
-    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books')).flush(initialBooks);
-    await flushBooksQuery();
+  it('invalidates the app-books browse caches when a shelf is removed, never a full collection cache', () => {
+    setup();
+    flushFacetsRequest(httpTestingController);
+
+    const invalidateSpy = vi.spyOn(queryClientHarness.queryClient, 'invalidateQueries');
 
     service.removeBooksFromShelf(10);
-    await flushBooksQuery();
 
-    expect(queryClientHarness.queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([
-      buildBook(1, {shelves: [untouchedShelf]}),
-      buildBook(2, {shelves: []}),
-    ]);
-    expect(service.books()).toEqual([
-      buildBook(1, {shelves: [untouchedShelf]}),
-      buildBook(2, {shelves: []}),
-    ]);
-  });
-
-  it('removes the books query cache when the auth token is cleared', async () => {
-    setup();
-    flushFacetsRequest(httpTestingController);
-
-    const removeQueriesSpy = vi.spyOn(queryClientHarness.queryClient, 'removeQueries');
-
-    service.books();
-    await flushBooksQuery();
-    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books')).flush([
-      buildBook(1),
-      buildBook(2),
-    ]);
-    await flushBooksQuery();
-
-    expect(queryClientHarness.queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([
-      buildBook(1),
-      buildBook(2),
-    ]);
-
-    authService.token.set(null);
-    await flushBooksQuery();
-
-    expect(removeQueriesSpy).toHaveBeenCalledWith({queryKey: BOOKS_QUERY_KEY});
-    expect(queryClientHarness.queryClient.getQueryData(BOOKS_QUERY_KEY)).toBeUndefined();
-    expect(service.isBooksLoading()).toBe(false);
-    expect(service.booksError()).toBeNull();
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: ['app-books']});
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: ['app-filter-options']});
+    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
   });
 });

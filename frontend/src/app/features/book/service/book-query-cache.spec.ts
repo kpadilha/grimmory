@@ -15,11 +15,11 @@ import {
   removeBooksFromCache
 } from './book-query-cache';
 import {
-  BOOKS_QUERY_KEY,
   bookDetailQueryKey,
   bookDetailQueryPrefix,
   bookRecommendationsQueryKey
 } from './book-query-keys';
+import {bookQueryKeys} from '../data/book-query-keys';
 
 function makeBook(id: number, overrides: Partial<Book> = {}): Book {
   return {
@@ -41,38 +41,24 @@ describe('book-query-cache', () => {
     queryClient = new QueryClient();
   });
 
-  it('adds new books and replaces existing entries by id', () => {
-    const firstBook = makeBook(1);
-    const secondBook = makeBook(2);
-    const updatedSecondBook = makeBook(2, {
-      libraryName: 'Updated Library',
-      metadata: {
-        bookId: 2,
-        title: 'Updated Book 2'
-      }
-    });
+  it('invalidates the app-books browse caches when a book is added, never a full collection cache', () => {
     const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [firstBook]);
-
-    addBookToCache(queryClient, secondBook);
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([firstBook, secondBook]);
-
-    addBookToCache(queryClient, updatedSecondBook);
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([firstBook, updatedSecondBook]);
+    addBookToCache(queryClient, makeBook(1));
 
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: ['app-books']});
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: ['app-filter-options']});
   });
 
-  it('invalidates the full books query and book detail queries', () => {
+  it('invalidates the paged/faceted browse queries and book detail queries', () => {
     const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     invalidateBooksQuery(queryClient);
     invalidateBookDetailQueries(queryClient, [1, 1, 2]);
     invalidateBookQueries(queryClient, [3, 3]);
 
-    expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: BOOKS_QUERY_KEY, exact: true});
+    expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookQueryKeys.collections()});
+    expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookQueryKeys.idQueries()});
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(1)});
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(2)});
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(3)});
@@ -80,48 +66,18 @@ describe('book-query-cache', () => {
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: ['app-filter-options']});
   });
 
-  it('patches list entries and invalidates matching detail queries', () => {
-    const firstBook = makeBook(1);
-    const secondBook = makeBook(2);
-    const updatedSecondBook = makeBook(2, {
-      libraryName: 'Updated Library'
-    });
+  it('invalidates matching detail and app-books queries when books are patched', () => {
     const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [firstBook, secondBook]);
+    patchBooksInCache(queryClient, [makeBook(2, {libraryName: 'Updated Library'})]);
 
-    patchBooksInCache(queryClient, [updatedSecondBook]);
-
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([firstBook, updatedSecondBook]);
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(2)});
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: ['app-books']});
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: ['app-filter-options']});
   });
 
-  it('patches metadata, selected fields, and updater callbacks in the list cache', () => {
-    const firstBook = makeBook(1, {
-      metadata: {
-        bookId: 1,
-        title: 'Original Title',
-        authors: ['Old Author']
-      }
-    });
-    const secondBook = makeBook(2, {
-      metadata: {
-        bookId: 2,
-        title: 'Second'
-      },
-      libraryName: 'Library A'
-    });
-    const thirdBook = makeBook(3, {
-      metadata: {
-        bookId: 3,
-        title: 'Third'
-      }
-    });
+  it('invalidates detail and app-books queries for metadata, field, and updater patches', () => {
     const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
-
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [firstBook, secondBook, thirdBook]);
 
     const updatedMetadata: BookMetadata = {
       bookId: 1,
@@ -141,24 +97,6 @@ describe('book-query-cache', () => {
       }
     }));
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([
-      {
-        ...firstBook,
-        metadata: {
-          ...firstBook.metadata,
-          title: 'Updated Title',
-          authors: ['New Author']
-        }
-      },
-      {
-        ...secondBook,
-        libraryName: 'Updated Library'
-      },
-      {
-        ...thirdBook,
-        personalRating: 4
-      }
-    ]);
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(1)});
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(2)});
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(3)});
@@ -183,18 +121,16 @@ describe('book-query-cache', () => {
     expect(queryClient.getQueryData(bookDetailQueryKey(2, false))).toEqual(secondBook);
   });
 
-  it('removes deleted books from the list cache and associated queries', () => {
+  it('removes detail/recommendation queries and invalidates app-books caches for deleted books', () => {
     const firstBook = makeBook(1);
     const secondBook = makeBook(2);
     const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [firstBook, secondBook]);
     queryClient.setQueryData(bookDetailQueryKey(1, false), firstBook);
     queryClient.setQueryData(bookRecommendationsQueryKey(1, 20), [secondBook]);
 
     removeBooksFromCache(queryClient, [1]);
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)).toEqual([secondBook]);
     expect(queryClient.getQueryData(bookDetailQueryKey(1, false))).toBeUndefined();
     expect(queryClient.getQueryData(bookRecommendationsQueryKey(1, 20))).toBeUndefined();
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({queryKey: ['app-books']});

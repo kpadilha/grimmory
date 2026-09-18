@@ -8,7 +8,6 @@ import {TranslocoDirective, TranslocoPipe, TranslocoService} from '@jsverse/tran
 import {SeriesDataService} from '../../service/series-data.service';
 import {SeriesSummary} from '../../model/series.model';
 import {SeriesCardComponent} from '../series-card/series-card.component';
-import {BookService} from '../../../book/service/book.service';
 import {ReadStatus} from '../../../book/model/book.model';
 import {PageTitleService} from '../../../../shared/service/page-title.service';
 import {ActivatedRoute, Router} from '@angular/router';
@@ -63,7 +62,6 @@ export class SeriesBrowserComponent implements OnInit {
   private static readonly MAX_SCALE = 1.3;
 
   private seriesDataService = inject(SeriesDataService);
-  private bookService = inject(BookService);
   private pageTitle = inject(PageTitleService);
   private t = inject(TranslocoService);
   private router = inject(Router);
@@ -73,7 +71,7 @@ export class SeriesBrowserComponent implements OnInit {
   private localStorageService = inject(LocalStorageService);
   private layoutService = inject(LayoutService);
 
-  readonly isBooksLoading = this.bookService.isBooksLoading;
+  readonly isBooksLoading = this.seriesDataService.isLoading;
   private readonly searchTerm = signal('');
   private readonly statusFilter = signal('all');
   private readonly sortBy = signal('name-asc');

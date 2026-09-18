@@ -1,26 +1,60 @@
 import {computed, inject, Injectable} from '@angular/core';
-import {injectQuery} from '@tanstack/angular-query-experimental';
-import {BookService} from '../../book/service/book.service';
-import {Book, computeSeriesReadStatus, ReadStatus} from '../../book/model/book.model';
-import {SeriesSummary} from '../model/series.model';
+import {HttpClient} from '@angular/common/http';
+import {lastValueFrom} from 'rxjs';
+import {injectQuery, queryOptions} from '@tanstack/angular-query-experimental';
+import {ReadStatus} from '../../book/model/book.model';
+import {SeriesCoverBook, SeriesSummary} from '../model/series.model';
 import {AuthService} from '../../../shared/service/auth.service';
+import {API_CONFIG} from '../../../core/config/api-config';
 import {BookQueryService} from '../../book/data/book-query.service';
 import {GLOBAL_FACET_PARAMS} from '../../book/data/book-query-params';
 import {toFacetDistinctCount} from '../../book/data/book-query.models';
+
+interface SeriesCoverBookDto {
+  bookId: number;
+  bookType?: string;
+  coverUpdatedOn?: string;
+  audiobookCoverUpdatedOn?: string;
+}
+
+interface SeriesSummaryDto {
+  seriesName: string;
+  bookCount: number;
+  readCount: number;
+  progress: number;
+  seriesStatus: string;
+  nextUnreadBookId?: number;
+  lastReadTime?: string;
+  addedOn?: string;
+  authors: string[];
+  categories: string[];
+  coverBooks: SeriesCoverBookDto[];
+}
 
 @Injectable({
   providedIn: 'root'
 })
 export class SeriesDataService {
 
-  private bookService = inject(BookService);
+  private readonly http = inject(HttpClient);
   private readonly authService = inject(AuthService);
   private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
+  private readonly url = `${API_CONFIG.BASE_URL}/api/v1/books/series/summary`;
 
-  // NOT migrated: needs per-series authors/categories/cover/dates, which /books/facets can't
-  // give (value+count only) - a bucketed series-summary aggregate is a future backend slice.
-  allSeries = computed(() => this.buildSeriesSummaries(this.bookService.books()));
+  private readonly seriesSummaryQuery = injectQuery(() => ({
+    ...queryOptions({
+      queryKey: ['books', 'series', 'summary'] as const,
+      queryFn: () => lastValueFrom(this.http.get<SeriesSummaryDto[]>(this.url)),
+    }),
+    enabled: !!this.token(),
+  }));
+
+  readonly isLoading = computed(() => !!this.token() && this.seriesSummaryQuery.isPending());
+
+  allSeries = computed<SeriesSummary[]>(() =>
+    (this.seriesSummaryQuery.data() ?? []).map(toSeriesSummary)
+  );
 
   // Sidebar badge count - the server's exact, uncapped COUNT(DISTINCT series), not the full collection.
   private readonly globalFacetsQuery = injectQuery(() => ({
@@ -30,70 +64,29 @@ export class SeriesDataService {
 
   readonly totalSeriesCount = computed(() => toFacetDistinctCount(this.globalFacetsQuery.data(), 'series'));
 
-  private buildSeriesSummaries(books: Book[]): SeriesSummary[] {
-    const seriesMap = new Map<string, Book[]>();
+}
 
-    for (const book of books) {
-      const seriesName = book.metadata?.seriesName;
-      if (!seriesName) continue;
+function toSeriesSummary(dto: SeriesSummaryDto): SeriesSummary {
+  return {
+    seriesName: dto.seriesName,
+    authors: dto.authors,
+    categories: dto.categories,
+    bookCount: dto.bookCount,
+    readCount: dto.readCount,
+    progress: dto.progress,
+    seriesStatus: dto.seriesStatus as ReadStatus,
+    nextUnreadBookId: dto.nextUnreadBookId ?? null,
+    lastReadTime: dto.lastReadTime ?? null,
+    addedOn: dto.addedOn ?? null,
+    coverBooks: dto.coverBooks.map(toSeriesCoverBook),
+  };
+}
 
-      const key = seriesName.trim().toLowerCase();
-      if (!seriesMap.has(key)) {
-        seriesMap.set(key, []);
-      }
-      seriesMap.get(key)!.push(book);
-    }
-
-    const summaries: SeriesSummary[] = [];
-
-    for (const seriesBooks of seriesMap.values()) {
-      const sorted = seriesBooks.sort((a, b) => {
-        const aNum = a.metadata?.seriesNumber ?? Number.MAX_SAFE_INTEGER;
-        const bNum = b.metadata?.seriesNumber ?? Number.MAX_SAFE_INTEGER;
-        return aNum - bNum;
-      });
-
-      const displayName = sorted[0].metadata?.seriesName?.trim() || '';
-      const authorSet = new Set<string>();
-      const categorySet = new Set<string>();
-
-      for (const book of sorted) {
-        book.metadata?.authors?.forEach(a => authorSet.add(a));
-        book.metadata?.categories?.forEach(c => categorySet.add(c));
-      }
-
-      const readCount = sorted.filter(b => b.readStatus === ReadStatus.READ).length;
-      const bookCount = sorted.length;
-
-      const lastReadTime = sorted
-        .map(b => b.lastReadTime)
-        .filter((t): t is string => !!t)
-        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
-
-      const addedOn = sorted
-        .map(b => b.addedOn)
-        .filter((t): t is string => !!t)
-        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
-
-      const nextUnread = sorted.find(b => b.readStatus !== ReadStatus.READ) || null;
-
-      summaries.push({
-        seriesName: displayName,
-        books: sorted,
-        authors: Array.from(authorSet),
-        categories: Array.from(categorySet),
-        bookCount,
-        readCount,
-        progress: bookCount > 0 ? readCount / bookCount : 0,
-        seriesStatus: computeSeriesReadStatus(sorted),
-        nextUnread,
-        lastReadTime,
-        coverBooks: sorted.slice(0, 7),
-        addedOn
-      });
-    }
-
-    return summaries;
-  }
-
+function toSeriesCoverBook(dto: SeriesCoverBookDto): SeriesCoverBook {
+  return {
+    id: dto.bookId,
+    bookType: dto.bookType,
+    coverUpdatedOn: dto.coverUpdatedOn,
+    audiobookCoverUpdatedOn: dto.audiobookCoverUpdatedOn,
+  };
 }

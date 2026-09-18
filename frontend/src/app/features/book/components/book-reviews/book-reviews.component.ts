@@ -2,6 +2,7 @@ import {Component, DestroyRef, effect, inject, Input, OnChanges, OnInit, signal,
 
 import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
 import {finalize} from 'rxjs';
+import {injectQuery} from '@tanstack/angular-query-experimental';
 
 import {BookReview, BookReviewService} from './book-review-service';
 import {ProgressSpinner} from '@openng/optimus-ui/progressspinner';
@@ -53,15 +54,22 @@ export class BookReviewsComponent implements OnInit, OnChanges {
   allSpoilersRevealed = false;
   reviewDownloadEnabled = true;
 
+  private readonly bookDetailQuery = injectQuery(() => {
+    const bookId = this.bookIdState();
+    return {
+      ...this.bookService.bookDetailQueryOptions(bookId ?? -1, false),
+      enabled: bookId !== null,
+    };
+  });
+
   constructor() {
     effect(() => {
-      const bookId = this.bookIdState();
-      if (!bookId) {
+      if (!this.bookIdState()) {
         this.reviewsLocked = false;
         return;
       }
 
-      const book = this.bookService.findBookById(bookId);
+      const book = this.bookDetailQuery.data();
       this.reviewsLocked = book?.metadata?.reviewsLocked ?? false;
     });
   }

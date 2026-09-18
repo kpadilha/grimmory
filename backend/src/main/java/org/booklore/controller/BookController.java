@@ -26,8 +26,10 @@ import org.booklore.service.book.DuplicateDetectionService;
 import org.booklore.service.book.PhysicalBookService;
 import org.booklore.service.browse.BookBrowseService;
 import org.booklore.service.browse.BookFacetService;
+import org.booklore.service.browse.SeriesSummaryService;
 import org.booklore.model.dto.browse.FacetGroupsResponse;
 import org.booklore.model.dto.browse.FacetValueBookIds;
+import org.booklore.model.dto.browse.SeriesSummary;
 import org.booklore.service.metadata.BookMetadataService;
 import org.booklore.service.progress.ReadingProgressService;
 import org.booklore.service.recommender.BookRecommendationService;
@@ -66,6 +68,7 @@ public class BookController {
     private final BookService bookService;
     private final BookBrowseService bookBrowseService;
     private final BookFacetService bookFacetService;
+    private final SeriesSummaryService seriesSummaryService;
     private final BookUpdateService bookUpdateService;
     private final BookRecommendationService bookRecommendationService;
     private final BookFileAttachmentService bookFileAttachmentService;
@@ -126,6 +129,13 @@ public class BookController {
     public ResponseEntity<Map<String, List<FacetValueBookIds>>> getFacetValueBookIds(
             @Parameter(description = "Facet keys to aggregate; repeatable") @RequestParam List<String> facet) {
         return ResponseEntity.ok(bookFacetService.getFacetValueBookIds(facet));
+    }
+
+    @Operation(summary = "Get series summaries", description = "Aggregated per-series data (covers, authors, categories, progress) for the series browser grid, scoped like the other browse endpoints.")
+    @ApiResponse(responseCode = "200", description = "Series summaries returned successfully")
+    @GetMapping("/series/summary")
+    public ResponseEntity<List<SeriesSummary>> getSeriesSummaries() {
+        return ResponseEntity.ok(seriesSummaryService.getSeriesSummaries());
     }
 
     @Operation(summary = "Get matching book ids", description = "Returns every book id matching the given sort, facet, facet_logic, and query parameters, in sort order. For select-all over the current filters.")

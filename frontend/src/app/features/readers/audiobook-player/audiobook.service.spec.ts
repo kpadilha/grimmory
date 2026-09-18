@@ -5,6 +5,7 @@ import {QueryClient} from '@tanstack/angular-query-experimental';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {AuthService} from '../../../shared/service/auth.service';
+import {bookDetailQueryPrefix} from '../../book/service/book-query-keys';
 import {AudiobookInfo, AudiobookProgress} from './audiobook.model';
 import {AudiobookService} from './audiobook.service';
 
@@ -89,7 +90,7 @@ describe('AudiobookService', () => {
     request.flush(null);
 
     expect(completed).toBe(true);
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(['books'], expect.any(Function));
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(9)});
   });
 
   it('includes both audiobookProgress and fileProgress in the payload when a book file id is present', () => {
@@ -115,6 +116,6 @@ describe('AudiobookService', () => {
     });
     request.flush(null);
 
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(['books'], expect.any(Function));
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(12)});
   });
 });

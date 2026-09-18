@@ -6,8 +6,8 @@
         aria-hidden="true"
         [ngClass]="'cover-' + i"
         [src]="getCoverUrl(i)"
-        [title]="book.metadata?.title"
-        [authors]="book.metadata?.authors ?? []"
+        [title]="series.seriesName"
+        [authors]="series.authors"
         size="sm"
         loading="lazy" />
     }
@@ -32,14 +32,12 @@
       <span class="progress-label">{{ series.readCount }}/{{ series.bookCount }}</span>
     </div>
 
-    @if (series.nextUnread) {
+    @if (series.nextUnreadBookId != null) {
       <div class="card-actions">
         <p-button
           size="small"
           icon="pi pi-book"
           [label]="'seriesBrowser.readNext' | transloco"
-          [pTooltip]="series.nextUnread.metadata?.title || ''"
-          tooltipPosition="bottom"
           severity="info"
           [text]="true"
           (click)="readNext($event)">

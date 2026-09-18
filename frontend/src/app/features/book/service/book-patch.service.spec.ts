@@ -6,7 +6,6 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {ResetProgressTypes} from '../../../shared/constants/reset-progress-type';
 import {ReadStatus} from '../model/book.model';
-import {BOOKS_QUERY_KEY} from './book-query-keys';
 import {BookPatchService} from './book-patch.service';
 
 describe('BookPatchService', () => {
@@ -16,7 +15,6 @@ describe('BookPatchService', () => {
 
   beforeEach(() => {
     queryClient = new QueryClient();
-    vi.spyOn(queryClient, 'setQueryData');
     vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue();
 
     TestBed.configureTestingModule({
@@ -57,7 +55,6 @@ describe('BookPatchService', () => {
     });
     request.flush(null);
 
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(BOOKS_QUERY_KEY, expect.any(Function));
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['books', 'detail', 11]});
   });
 
@@ -83,7 +80,6 @@ describe('BookPatchService', () => {
     request.flush(null);
 
     httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books/progress'));
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(BOOKS_QUERY_KEY, expect.any(Function));
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['books', 'detail', 7]});
   });
 
@@ -99,7 +95,6 @@ describe('BookPatchService', () => {
       {bookId: 2, readStatus: ReadStatus.READING, readStatusModifiedTime: '2026-03-02T00:00:00Z', dateFinished: '2026-03-03'},
     ]);
 
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(BOOKS_QUERY_KEY, expect.any(Function));
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['app-books']});
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['app-filter-options']});
   });
@@ -115,7 +110,6 @@ describe('BookPatchService', () => {
     });
     request.flush(null);
 
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(BOOKS_QUERY_KEY, expect.any(Function));
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['books', 'detail', 5]});
   });
 
@@ -133,20 +127,15 @@ describe('BookPatchService', () => {
       {bookId: 2, readStatus: ReadStatus.READ, readStatusModifiedTime: '2026-03-05T00:00:00Z', dateFinished: '2026-03-05'},
     ]);
 
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(BOOKS_QUERY_KEY, expect.any(Function));
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['app-books']});
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['app-filter-options']});
   });
 
-  it('updates the cached last read timestamp without calling the backend', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-03-26T12:00:00Z'));
-
+  it('invalidates the app-books browse caches without calling the backend', () => {
     service.updateLastReadTime(3);
 
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(BOOKS_QUERY_KEY, expect.any(Function));
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['app-books']});
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({queryKey: ['app-filter-options']});
     httpTestingController.expectNone(req => req.url.includes('/api/v1/books'));
-
-    vi.useRealTimers();
   });
 });

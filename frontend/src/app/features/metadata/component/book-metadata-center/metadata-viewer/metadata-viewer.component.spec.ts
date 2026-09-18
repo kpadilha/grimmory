@@ -383,7 +383,7 @@ describe('MetadataViewerComponent', () => {
     component.book = createBook({}, {bookId: 21, seriesName: 'Series One'});
 
     await vi.waitFor(() => {
-      expect(getBooksInSeries).toHaveBeenCalledWith(21);
+      expect(getBooksInSeries).toHaveBeenCalledWith('Series One');
     });
     expect(component.bookInSeries).toEqual([]);
   });

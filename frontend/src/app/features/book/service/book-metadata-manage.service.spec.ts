@@ -7,7 +7,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {MessageService} from '@openng/optimus-ui/api';
 
 import {Book, BookMetadata, MetadataUpdateWrapper} from '../model/book.model';
-import {BOOKS_QUERY_KEY} from './book-query-keys';
+import {bookDetailQueryPrefix} from './book-query-keys';
 import {BookMetadataManageService} from './book-metadata-manage.service';
 import {TranslocoService} from '@jsverse/transloco';
 
@@ -61,13 +61,12 @@ describe('BookMetadataManageService', () => {
     vi.restoreAllMocks();
   });
 
-  it('updates metadata with merge params and patches the cached metadata', () => {
-    const original = makeBook(7, {title: 'Old Title'});
+  it('updates metadata with merge params and invalidates the cached book detail', () => {
     const wrapper: MetadataUpdateWrapper = {
       metadata: {bookId: 7, title: 'Updated Title'},
       clearFlags: {},
     };
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [original]);
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     service.updateBookMetadata(7, wrapper, true, 'REPLACE_WHEN_PROVIDED').subscribe(metadata => {
       expect(metadata.title).toBe('Updated Title');
@@ -80,13 +79,11 @@ describe('BookMetadataManageService', () => {
     expect(request.request.body).toEqual(wrapper);
     request.flush({bookId: 7, title: 'Updated Title'});
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)?.[0].metadata?.title).toBe('Updated Title');
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(7)});
   });
 
-  it('toggles cached metadata lock fields for successful bulk lock updates', () => {
-    queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, [
-      makeBook(1, {titleLocked: false, authorsLocked: false}),
-    ]);
+  it('invalidates the cached book detail for successful bulk lock updates', () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     service.toggleFieldLocks([1], {title: 'LOCK', authorsLocked: 'LOCK'}).subscribe();
 
@@ -98,10 +95,7 @@ describe('BookMetadataManageService', () => {
     });
     request.flush(null);
 
-    expect(queryClient.getQueryData<Book[]>(BOOKS_QUERY_KEY)?.[0].metadata).toMatchObject({
-      titleLocked: true,
-      authorsLocked: true,
-    });
+    expect(invalidateSpy).toHaveBeenCalledWith({queryKey: bookDetailQueryPrefix(1)});
   });
 
   it('shows an error toast when toggleFieldLocks fails', () => {

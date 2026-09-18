@@ -1,7 +1,7 @@
-import {computed, effect, inject, Injectable, signal} from '@angular/core';
-import {first, from, lastValueFrom, Observable, throwError} from 'rxjs';
+import {computed, inject, Injectable} from '@angular/core';
+import {from, lastValueFrom, Observable, of, throwError} from 'rxjs';
 import {HttpClient, HttpParams} from '@angular/common/http';
-import {catchError, map, tap} from 'rxjs/operators';
+import {catchError, tap} from 'rxjs/operators';
 import {Book, BookDeletionResponse, BookRecommendation, BookSetting, BookStatusUpdateResponse, BookType, CreatePhysicalBookRequest, PersonalRatingUpdateResponse, ReadStatus} from '../model/book.model';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {MessageService} from '@openng/optimus-ui/api';
@@ -13,7 +13,6 @@ import {BookPatchService} from './book-patch.service';
 import {TranslocoService} from '@jsverse/transloco';
 import {injectQuery, queryOptions, QueryClient} from '@tanstack/angular-query-experimental';
 import {
-  BOOKS_QUERY_KEY,
   bookDetailQueryKey,
   bookRecommendationsQueryKey,
 } from './book-query-keys';
@@ -25,7 +24,7 @@ import {
 } from './book-query-cache';
 import {BookQueryService} from '../data/book-query.service';
 import {GLOBAL_FACET_PARAMS} from '../data/book-query-params';
-import {toFacetTotalCount} from '../data/book-query.models';
+import {bookSummaryToBook, toFacetCountMap, toFacetTotalCount} from '../data/book-query.models';
 
 @Injectable({
   providedIn: 'root',
@@ -45,28 +44,8 @@ export class BookService {
   private readonly token = this.authService.token;
   private readonly bookQueryService = inject(BookQueryService);
 
-  // Off until a real consumer asks for the full collection - see books() below. A 132k-book
-  // library with ~100 columns must never be the payload that boots the app.
-  private readonly booksRequested = signal(false);
-  private booksRequestScheduled = false;
-
-  private booksQuery = injectQuery(() => ({
-    ...this.getBooksQueryOptions(),
-    enabled: !!this.token() && this.booksRequested(),
-  }));
-
-  // ponytail: demand is marked via queueMicrotask so this stays a pure read when called from
-  // inside a computed()/effect() - Angular forbids signal writes mid-derivation otherwise.
-  books = (): Book[] => {
-    if (!this.booksRequestScheduled && !this.booksRequested()) {
-      this.booksRequestScheduled = true;
-      queueMicrotask(() => this.booksRequested.set(true));
-    }
-    return this.booksQuery.data() ?? [];
-  };
-
-  // Sidebar badge counts and the boot-time "all books" total come from server-side facet
-  // counts, not the full collection - see books() above for why that fetch must stay lazy.
+  // Sidebar badge counts, the boot-time "all books" total, and uniqueMetadata below all come
+  // from server-side facet counts - never the full collection (132k books, ~100 columns each).
   private readonly globalFacetsQuery = injectQuery(() => ({
     ...this.bookQueryService.facets(GLOBAL_FACET_PARAMS),
     enabled: !!this.token(),
@@ -74,66 +53,21 @@ export class BookService {
 
   readonly totalBookCount = computed(() => toFacetTotalCount(this.globalFacetsQuery.data(), 'shelf_status'));
 
-  /** Pre-computed unique metadata values for autocomplete across the app. */
+  // Capped at the facets endpoint's top-100-per-group limit, unlike the old full-scan version -
+  // an autocomplete list beyond the 100 most common values was never worth a 132k-book fetch.
   readonly uniqueMetadata = computed(() => {
-    const books = this.books();
-    const authors = new Set<string>();
-    const categories = new Set<string>();
-    const moods = new Set<string>();
-    const tags = new Set<string>();
-    const publishers = new Set<string>();
-    const series = new Set<string>();
-
-    for (const book of books) {
-      const m = book.metadata;
-      if (!m) continue;
-      m.authors?.forEach(v => authors.add(v));
-      m.categories?.forEach(v => categories.add(v));
-      m.moods?.forEach(v => moods.add(v));
-      m.tags?.forEach(v => tags.add(v));
-      if (m.publisher) publishers.add(m.publisher);
-      if (m.seriesName) series.add(m.seriesName);
-    }
+    const facets = this.globalFacetsQuery.data();
+    const values = (key: string) => Array.from(toFacetCountMap(facets, key).keys());
 
     return {
-      authors: Array.from(authors),
-      categories: Array.from(categories),
-      moods: Array.from(moods),
-      tags: Array.from(tags),
-      publishers: Array.from(publishers),
-      series: Array.from(series),
+      authors: values('author'),
+      categories: values('genre'),
+      moods: values('mood'),
+      tags: values('tag'),
+      publishers: values('publisher'),
+      series: values('series'),
     };
   });
-
-  booksError = computed<string | null>(() => {
-    if (!this.token() || !this.booksQuery.isError()) {
-      return null;
-    }
-
-    const error = this.booksQuery.error();
-    return error instanceof Error ? error.message : 'Failed to load books';
-  });
-
-  isBooksLoading = computed(() => !!this.token() && this.booksRequested() && this.booksQuery.isPending());
-
-  constructor() {
-    effect(() => {
-      const token = this.token();
-      if (token === null) {
-        this.queryClient.removeQueries({queryKey: BOOKS_QUERY_KEY});
-        this.booksRequested.set(false);
-        this.booksRequestScheduled = false;
-      }
-    });
-  }
-
-  private getBooksQueryOptions() {
-    return queryOptions({
-      queryKey: BOOKS_QUERY_KEY,
-      queryFn: () => lastValueFrom(this.http.get<Book[]>(this.url, {params: {stripForListView: false}})),
-      staleTime: 5 * 60_000,
-    });
-  }
 
   bookDetailQueryOptions(bookId: number, withDescription: boolean) {
     return queryOptions({
@@ -174,20 +108,10 @@ export class BookService {
   }
 
   removeBooksFromShelf(shelfId: number): void {
-    this.queryClient.setQueryData<Book[]>(BOOKS_QUERY_KEY, current =>
-      (current ?? []).map(book => ({
-        ...book,
-        shelves: book.shelves?.filter(shelf => shelf.id !== shelfId),
-      }))
-    );
     invalidateAppBooksQueries(this.queryClient);
   }
 
   /*------------------ Book Retrieval ------------------*/
-
-  findBookById(bookId: number): Book | undefined {
-    return this.books().find(book => +book.id === +bookId);
-  }
 
   // /books/batch fetches only the requested ids - a selection editor must never wait on the
   // full collection just to resolve the few books it was opened with.
@@ -198,19 +122,29 @@ export class BookService {
     return lastValueFrom(this.http.get<Book[]>(`${this.url}/batch`, {params}));
   }
 
-  getBooksInSeries(bookId: number): Observable<Book[]> {
-    return from(this.queryClient.ensureQueryData(this.getBooksQueryOptions())).pipe(
-      map(books => {
-        const currentBook = books.find(book => book.id === bookId);
-        if (!currentBook?.metadata?.seriesName) {
-          return [];
-        }
+  // Pages /books/page scoped to the series facet to exhaustion, instead of filtering the full
+  // collection client-side - a series is a handful of books, not 132k.
+  getBooksInSeries(seriesName: string): Observable<Book[]> {
+    if (!seriesName) {
+      return of([]);
+    }
 
-        const seriesName = currentBook.metadata.seriesName.toLowerCase();
-        return books.filter(book => book.metadata?.seriesName?.toLowerCase() === seriesName);
-      }),
-      first()
-    );
+    return new Observable<Book[]>(subscriber => {
+      const controller = new AbortController();
+      this.bookQueryService.fetchAllPages({
+        facets: {series: [seriesName]},
+        facetLogic: 'and',
+        sort: [],
+        size: 100,
+      }, controller.signal).then(
+        summaries => {
+          subscriber.next(summaries.map(bookSummaryToBook));
+          subscriber.complete();
+        },
+        error => subscriber.error(error),
+      );
+      return () => controller.abort();
+    });
   }
 
   getBookRecommendations(bookId: number, limit: number = 20): Observable<BookRecommendation[]> {
@@ -290,13 +224,6 @@ export class BookService {
   /*------------------ Reading & Viewer Settings ------------------*/
 
   readBook(bookId: number, reader?: 'epub-streaming', explicitBookType?: BookType): void {
-    const book = this.findBookById(bookId);
-
-    if (book) {
-      this.navigateToReader(book, bookId, reader, explicitBookType);
-      return;
-    }
-
     this.ensureBookDetail(bookId, false).then(detail => {
       this.navigateToReader(detail, bookId, reader, explicitBookType);
     }).catch(() => {

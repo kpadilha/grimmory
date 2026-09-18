@@ -52,16 +52,13 @@ import DOMPurify from 'dompurify';
 export class MetadataViewerComponent implements OnInit, AfterViewChecked {
   private bookService = inject(BookService);
   private currentBook = signal<Book | null>(null);
-  private readonly seriesLookupBookId = computed(() => {
-    const metadata = this.currentBook()?.metadata;
-    return metadata?.seriesName ? metadata.bookId : null;
-  });
+  private readonly seriesLookupName = computed(() => this.currentBook()?.metadata?.seriesName ?? null);
   private readonly bookInSeriesSignal = toSignal(
-    toObservable(this.seriesLookupBookId).pipe(
-      switchMap(bookId =>
-        bookId == null
+    toObservable(this.seriesLookupName).pipe(
+      switchMap(seriesName =>
+        seriesName == null
           ? of([])
-          : this.bookService.getBooksInSeries(bookId).pipe(
+          : this.bookService.getBooksInSeries(seriesName).pipe(
             catchError(() => of([]))
           )
       ),

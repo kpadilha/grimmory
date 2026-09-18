@@ -1930,7 +1930,7 @@ export class CbxReaderComponent implements OnInit, OnDestroy {
   }
 
   private loadSeriesNavigation(book: Book): void {
-    this.bookService.getBooksInSeries(book.id)
+    this.bookService.getBooksInSeries(book.metadata?.seriesName ?? '')
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
       next: (seriesBooks) => {
