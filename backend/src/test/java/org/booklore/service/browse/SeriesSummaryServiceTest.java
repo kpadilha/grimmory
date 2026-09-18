@@ -3,6 +3,7 @@ package org.booklore.service.browse;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.booklore.BookloreApplication;
+import org.booklore.browse.BrowsePage;
 import org.booklore.config.security.service.AuthenticationService;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
@@ -93,6 +94,7 @@ class SeriesSummaryServiceTest {
 
     @BeforeEach
     void seed() {
+        seriesSummaryService.clearCache();
         userEntity = BookLoreUserEntity.builder().username("reader").passwordHash("x").name("Reader").build();
         em.persist(userEntity);
         library = LibraryEntity.builder().name("Lib").icon("book").watch(false)
@@ -113,6 +115,10 @@ class SeriesSummaryServiceTest {
                 .build();
     }
 
+    private BrowsePage<SeriesSummary> summaries(int page, int size, String sort, String query, String status) {
+        return seriesSummaryService.getSeriesSummaries(page, size, sort, query, status);
+    }
+
     @Test
     void aggregatesBookCountAuthorsAndCategoriesAcrossASeries() {
         bookInSeries("Book One", "Chronicles", 1f, "Author A", "Fantasy");
@@ -120,10 +126,10 @@ class SeriesSummaryServiceTest {
         em.flush();
         em.clear();
 
-        List<SeriesSummary> summaries = seriesSummaryService.getSeriesSummaries();
+        List<SeriesSummary> content = summaries(0, 20, null, null, null).content();
 
-        assertThat(summaries).hasSize(1);
-        SeriesSummary series = summaries.get(0);
+        assertThat(content).hasSize(1);
+        SeriesSummary series = content.get(0);
         assertThat(series.getSeriesName()).isEqualTo("Chronicles");
         assertThat(series.getBookCount()).isEqualTo(2);
         assertThat(series.getAuthors()).containsExactlyInAnyOrder("Author A", "Author B");
@@ -139,7 +145,7 @@ class SeriesSummaryServiceTest {
         em.flush();
         em.clear();
 
-        SeriesSummary series = seriesSummaryService.getSeriesSummaries().get(0);
+        SeriesSummary series = summaries(0, 20, null, null, null).content().get(0);
 
         assertThat(series.getBookCount()).isEqualTo(4);
         assertThat(series.getCoverBooks()).hasSize(3);
@@ -160,11 +166,111 @@ class SeriesSummaryServiceTest {
         em.flush();
         em.clear();
 
-        SeriesSummary series = seriesSummaryService.getSeriesSummaries().get(0);
+        SeriesSummary series = summaries(0, 20, null, null, null).content().get(0);
 
         assertThat(series.getReadCount()).isEqualTo(1);
         assertThat(series.getNextUnreadBookId()).isEqualTo(second.getId());
         assertThat(series.getSeriesStatus()).isEqualTo(ReadStatus.READING.name());
+    }
+
+    @Test
+    void paginatesInNameOrderAndReportsTotalElementsAcrossTheWholeQuery() {
+        bookInSeries("Book One", "Alpha", 1f, "Author A", "Fantasy");
+        bookInSeries("Book One", "Bravo", 1f, "Author A", "Fantasy");
+        bookInSeries("Book One", "Charlie", 1f, "Author A", "Fantasy");
+        em.flush();
+        em.clear();
+
+        BrowsePage<SeriesSummary> firstPage = summaries(0, 2, "name-asc", null, null);
+        assertThat(firstPage.content()).extracting(SeriesSummary::getSeriesName).containsExactly("Alpha", "Bravo");
+        assertThat(firstPage.page().totalElements()).isEqualTo(3);
+        assertThat(firstPage.page().totalPages()).isEqualTo(2);
+
+        BrowsePage<SeriesSummary> secondPage = summaries(1, 2, "name-asc", null, null);
+        assertThat(secondPage.content()).extracting(SeriesSummary::getSeriesName).containsExactly("Charlie");
+        assertThat(secondPage.page().totalElements()).isEqualTo(3);
+    }
+
+    @Test
+    void neverHydratesAuthorsOrCoversForSeriesOutsideTheRequestedPage() {
+        bookInSeries("Book One", "Alpha", 1f, "Author A", "Fantasy");
+        bookInSeries("Book One", "Bravo", 1f, "Author B", "Adventure");
+        em.flush();
+        em.clear();
+
+        BrowsePage<SeriesSummary> firstPage = summaries(0, 1, "name-asc", null, null);
+
+        assertThat(firstPage.content()).hasSize(1);
+        assertThat(firstPage.content().get(0).getSeriesName()).isEqualTo("Alpha");
+        assertThat(firstPage.content().get(0).getAuthors()).containsExactly("Author A");
+    }
+
+    @Test
+    void searchesBySeriesNameServerSide() {
+        bookInSeries("Book One", "Wheel of Time", 1f, "Author A", "Fantasy");
+        bookInSeries("Book One", "Discworld", 1f, "Author B", "Comedy");
+        em.flush();
+        em.clear();
+
+        BrowsePage<SeriesSummary> page = summaries(0, 20, null, "wheel", null);
+
+        assertThat(page.content()).extracting(SeriesSummary::getSeriesName).containsExactly("Wheel of Time");
+        assertThat(page.page().totalElements()).isEqualTo(1);
+    }
+
+    @Test
+    void filtersByStatusServerSide() {
+        BookEntity readBook = bookInSeries("Book One", "Finished", 1f, "Author A", "Fantasy");
+        bookInSeries("Book One", "Untouched", 1f, "Author B", "Adventure");
+        em.persist(UserBookProgressEntity.builder().user(userEntity).book(readBook).readStatus(ReadStatus.READ).build());
+        em.flush();
+        em.clear();
+
+        BrowsePage<SeriesSummary> completed = summaries(0, 20, null, null, "completed");
+        assertThat(completed.content()).extracting(SeriesSummary::getSeriesName).containsExactly("Finished");
+
+        BrowsePage<SeriesSummary> notStarted = summaries(0, 20, null, null, "not-started");
+        assertThat(notStarted.content()).extracting(SeriesSummary::getSeriesName).containsExactly("Untouched");
+    }
+
+    @Test
+    void sortsByBookCountDescendingWhenRequested() {
+        bookInSeries("Book One", "Solo", 1f, "Author A", "Fantasy");
+        bookInSeries("Book One", "Duo", 1f, "Author B", "Adventure");
+        bookInSeries("Book Two", "Duo", 2f, "Author B", "Adventure");
+        em.flush();
+        em.clear();
+
+        BrowsePage<SeriesSummary> page = summaries(0, 20, "book-count", null, null);
+
+        assertThat(page.content()).extracting(SeriesSummary::getSeriesName).containsExactly("Duo", "Solo");
+    }
+
+    // A non-admin user only sees series built from books in libraries assigned to them - the
+    // paginated aggregate query must apply the same scope the old full-load call did.
+    @Test
+    void scopesSeriesToLibrariesAssignedToTheUser() {
+        LibraryEntity otherLibrary = LibraryEntity.builder().name("Other").icon("book").watch(false)
+                .formatPriority(List.of(BookFileType.EPUB)).build();
+        em.persist(otherLibrary);
+        LibraryPathEntity otherPath = LibraryPathEntity.builder().library(otherLibrary).path("/other").build();
+        em.persist(otherPath);
+
+        bookInSeries("Book One", "Visible", 1f, "Author A", "Fantasy");
+        BookEntity hiddenBook = BookEntity.builder()
+                .library(otherLibrary).libraryPath(otherPath).addedOn(Instant.now()).deleted(false).build();
+        em.persist(hiddenBook);
+        BookMetadataEntity hiddenMetadata = BookMetadataEntity.builder()
+                .book(hiddenBook).title("Hidden Book").seriesName("Hidden").seriesNumber(1f).build();
+        em.persist(hiddenMetadata);
+        hiddenBook.setMetadata(hiddenMetadata);
+        em.flush();
+        em.clear();
+
+        BrowsePage<SeriesSummary> page = summaries(0, 20, null, null, null);
+
+        assertThat(page.content()).extracting(SeriesSummary::getSeriesName).containsExactly("Visible");
+        assertThat(page.page().totalElements()).isEqualTo(1);
     }
 
     private BookEntity bookInSeries(String title, String seriesName, Float seriesNumber, String authorName, String genre) {
