@@ -25,7 +25,6 @@ import {
 import {BookQueryService} from '../data/book-query.service';
 import {GLOBAL_FACET_PARAMS} from '../data/book-query-params';
 import {bookSummaryToBook, toFacetTotalCount} from '../data/book-query.models';
-import {MetadataValuesService} from '../../metadata/component/metadata-manager/metadata-values.service';
 
 @Injectable({
   providedIn: 'root',
@@ -44,7 +43,6 @@ export class BookService {
   private readonly t = inject(TranslocoService);
   private readonly token = this.authService.token;
   private readonly bookQueryService = inject(BookQueryService);
-  private readonly metadataValuesService = inject(MetadataValuesService);
 
   // Sidebar badge counts and the boot-time "all books" total come from server-side facet
   // counts - never the full collection (132k books, ~100 columns each).
@@ -54,28 +52,6 @@ export class BookService {
   }));
 
   readonly totalBookCount = computed(() => toFacetTotalCount(this.globalFacetsQuery.data(), 'shelf_status'));
-
-  // /facets/values is exhaustive and uncapped, unlike /facets (top-100-per-group) - an
-  // autocomplete that dropped existing values past 100 let users create duplicate metadata.
-  private readonly uniqueMetadataQuery = injectQuery(() => ({
-    queryKey: ['books', 'metadata-values', 'unique'] as const,
-    queryFn: () => this.metadataValuesService.fetch(['author', 'genre', 'mood', 'tag', 'publisher', 'series']),
-    enabled: !!this.token(),
-  }));
-
-  readonly uniqueMetadata = computed(() => {
-    const values = this.uniqueMetadataQuery.data();
-    const valuesFor = (key: string) => (values?.[key] ?? []).map(v => v.value);
-
-    return {
-      authors: valuesFor('author'),
-      categories: valuesFor('genre'),
-      moods: valuesFor('mood'),
-      tags: valuesFor('tag'),
-      publishers: valuesFor('publisher'),
-      series: valuesFor('series'),
-    };
-  });
 
   bookDetailQueryOptions(bookId: number, withDescription: boolean) {
     return queryOptions({

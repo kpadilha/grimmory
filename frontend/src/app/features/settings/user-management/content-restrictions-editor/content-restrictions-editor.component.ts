@@ -1,5 +1,6 @@
 import {ChangeDetectionStrategy, Component, computed, DestroyRef, EventEmitter, inject, Input, OnChanges, OnInit, Output, signal, SimpleChanges} from '@angular/core';
 import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
+import {forkJoin} from 'rxjs';
 import {FormsModule} from '@angular/forms';
 import {Button} from '@openng/optimus-ui/button';
 import {Select} from '@openng/optimus-ui/select';
@@ -13,8 +14,12 @@ import {
   ContentRestrictionType
 } from '../content-restriction.model';
 import {ContentRestrictionService} from '../content-restriction.service';
-import {BookService} from '../../../book/service/book.service';
+import {MetadataValuesService} from '../../../metadata/component/metadata-manager/metadata-values.service';
 import {TranslocoDirective, TranslocoPipe, TranslocoService} from '@jsverse/transloco';
+
+// Enumerates the picker's own vocabulary, not a typeahead - large enough for a Select dropdown
+// without repeating the exhaustive /facets/values load a boot-time query used to make.
+const AVAILABLE_VALUES_LIMIT = 200;
 
 @Component({
   selector: 'app-content-restrictions-editor',
@@ -37,26 +42,22 @@ export class ContentRestrictionsEditorComponent implements OnInit, OnChanges {
   @Output() restrictionsChanged = new EventEmitter<ContentRestriction[]>();
 
   private contentRestrictionService = inject(ContentRestrictionService);
-  private bookService = inject(BookService);
+  private metadataValuesService = inject(MetadataValuesService);
   private messageService = inject(MessageService);
   private t = inject(TranslocoService);
   private destroyRef = inject(DestroyRef);
-  private readonly sortedMetadata = computed(() => {
-    const md = this.bookService.uniqueMetadata();
-    return {
-      categories: [...md.categories].sort(),
-      tags: [...md.tags].sort(),
-      moods: [...md.moods].sort(),
-    };
-  });
+
+  // Loaded once this editor mounts (never on app boot) via the capped typeahead endpoint -
+  // not the exhaustive value/book-id list a boot-time query used to fetch for every user.
+  private readonly availableValues = signal({categories: [] as string[], tags: [] as string[], moods: [] as string[]});
 
   readonly restrictions = signal<ContentRestriction[]>([]);
   private readonly excludeRestrictions = computed(() => this.restrictions().filter(r => r.mode === ContentRestrictionMode.EXCLUDE));
   private readonly allowOnlyRestrictions = computed(() => this.restrictions().filter(r => r.mode === ContentRestrictionMode.ALLOW_ONLY));
 
-  get availableCategories(): string[] { return this.sortedMetadata().categories; }
-  get availableTags(): string[] { return this.sortedMetadata().tags; }
-  get availableMoods(): string[] { return this.sortedMetadata().moods; }
+  get availableCategories(): string[] { return this.availableValues().categories; }
+  get availableTags(): string[] { return this.availableValues().tags; }
+  get availableMoods(): string[] { return this.availableValues().moods; }
 
   newRestriction: Partial<ContentRestriction> = {
     restrictionType: ContentRestrictionType.CATEGORY,
@@ -82,12 +83,21 @@ export class ContentRestrictionsEditorComponent implements OnInit, OnChanges {
 
   ngOnInit() {
     this.loadRestrictions();
+    this.loadAvailableValues();
   }
 
   ngOnChanges(changes: SimpleChanges) {
     if (changes['userId'] && !changes['userId'].firstChange) {
       this.loadRestrictions();
     }
+  }
+
+  private loadAvailableValues() {
+    forkJoin({
+      categories: this.metadataValuesService.search('genre', '', AVAILABLE_VALUES_LIMIT),
+      tags: this.metadataValuesService.search('tag', '', AVAILABLE_VALUES_LIMIT),
+      moods: this.metadataValuesService.search('mood', '', AVAILABLE_VALUES_LIMIT),
+    }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe(values => this.availableValues.set(values));
   }
 
   loadRestrictions() {

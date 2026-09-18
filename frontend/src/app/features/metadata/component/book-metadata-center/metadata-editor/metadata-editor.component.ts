@@ -30,6 +30,7 @@ import {Router} from '@angular/router';
 import {UserService} from '../../../../settings/user-management/user.service';
 import {AppSettingsService} from '../../../../../shared/service/app-settings.service';
 import {MetadataProviderSpecificFields} from '../../../../../shared/model/app-settings.model';
+import {metadataValueTypeahead} from '../../metadata-manager/metadata-values.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {CdkDragDrop, CdkDropList, CdkDrag, moveItemInArray} from '@angular/cdk/drag-drop';
 
@@ -102,7 +103,15 @@ export class MetadataEditorComponent implements OnInit {
   private destroyRef = inject(DestroyRef);
   private appSettingsService = inject(AppSettingsService);
   private readonly t = inject(TranslocoService);
-  private readonly uniqueMetadata = computed(() => this.bookService.uniqueMetadata());
+
+  // Server-side typeahead per field - never the full metadata vocabulary (48k authors,
+  // 23k series) loaded up front just to back an autocomplete dropdown.
+  private readonly authorsTypeahead = metadataValueTypeahead('author');
+  private readonly categoriesTypeahead = metadataValueTypeahead('genre');
+  private readonly moodsTypeahead = metadataValueTypeahead('mood');
+  private readonly tagsTypeahead = metadataValueTypeahead('tag');
+  private readonly publishersTypeahead = metadataValueTypeahead('publisher');
+  private readonly seriesTypeahead = metadataValueTypeahead('series');
 
   metadataForm: FormGroup;
   currentBookId!: number;
@@ -119,19 +128,13 @@ export class MetadataEditorComponent implements OnInit {
 
   originalMetadata!: BookMetadata;
 
-  get allAuthors(): string[] { return this.uniqueMetadata().authors; }
-  get allCategories(): string[] { return this.uniqueMetadata().categories; }
-  get allMoods(): string[] { return this.uniqueMetadata().moods; }
-  get allTags(): string[] { return this.uniqueMetadata().tags; }
-  get allPublishers(): string[] { return this.uniqueMetadata().publishers; }
-  get allSeries(): string[] { return this.uniqueMetadata().series; }
-  filteredCategories: string[] = [];
-  filteredAuthors: string[] = [];
+  get filteredAuthors(): string[] { return this.authorsTypeahead.results(); }
+  get filteredCategories(): string[] { return this.categoriesTypeahead.results(); }
+  get filteredMoods(): string[] { return this.moodsTypeahead.results(); }
+  get filteredTags(): string[] { return this.tagsTypeahead.results(); }
+  get filteredPublishers(): string[] { return this.publishersTypeahead.results(); }
+  get filteredSeries(): string[] { return this.seriesTypeahead.results(); }
   authorInputValue = '';
-  filteredMoods: string[] = [];
-  filteredTags: string[] = [];
-  filteredPublishers: string[] = [];
-  filteredSeries: string[] = [];
   private metadataCenterViewMode: 'route' | 'dialog' = 'route';
 
   contentRatingOptions: {label: string, value: string}[] = [];
@@ -185,17 +188,11 @@ export class MetadataEditorComponent implements OnInit {
   });
 
   filterCategories(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredCategories = this.allCategories.filter((cat) =>
-      cat.toLowerCase().includes(query)
-    );
+    this.categoriesTypeahead.filter(event);
   }
 
   filterAuthors(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredAuthors = this.allAuthors.filter((cat) =>
-      cat.toLowerCase().includes(query)
-    );
+    this.authorsTypeahead.filter(event);
   }
 
   dropAuthor(event: CdkDragDrop<string[]>) {
@@ -237,31 +234,19 @@ export class MetadataEditorComponent implements OnInit {
   }
 
   filterMoods(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredMoods = this.allMoods.filter((mood) =>
-      mood.toLowerCase().includes(query)
-    );
+    this.moodsTypeahead.filter(event);
   }
 
   filterTags(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredTags = this.allTags.filter((tag) =>
-      tag.toLowerCase().includes(query)
-    );
+    this.tagsTypeahead.filter(event);
   }
 
   filterPublishers(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredPublishers = this.allPublishers.filter((publisher) =>
-      publisher.toLowerCase().includes(query)
-    );
+    this.publishersTypeahead.filter(event);
   }
 
   filterSeries(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredSeries = this.allSeries.filter((seriesName) =>
-      seriesName.toLowerCase().includes(query)
-    );
+    this.seriesTypeahead.filter(event);
   }
 
   constructor() {

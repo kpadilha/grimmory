@@ -1,4 +1,4 @@
-import {Component, computed, effect, inject, signal} from '@angular/core';
+import {Component, effect, inject, signal} from '@angular/core';
 import {DynamicDialogConfig, DynamicDialogRef} from '@openng/optimus-ui/dynamicdialog';
 import {FormsModule} from '@angular/forms';
 import {Button} from '@openng/optimus-ui/button';
@@ -14,6 +14,7 @@ import {LibraryService} from '../../service/library.service';
 import {Library} from '../../model/library.model';
 import {CreatePhysicalBookRequest} from '../../model/book.model';
 import {TranslocoDirective} from '@jsverse/transloco';
+import {metadataValueTypeahead} from '../../../metadata/component/metadata-manager/metadata-values.service';
 
 @Component({
   selector: 'app-add-physical-book-dialog',
@@ -50,11 +51,11 @@ export class AddPhysicalBookDialogComponent {
   pageCount: number | null = null;
   categories: string[] = [];
 
-  private readonly metadata = computed(() => this.bookService.uniqueMetadata());
-  get allAuthors(): string[] { return this.metadata().authors; }
-  get allCategories(): string[] { return this.metadata().categories; }
-  filteredAuthors: string[] = [];
-  filteredCategories: string[] = [];
+  // Server-side typeahead per field - never the full metadata vocabulary loaded up front.
+  private readonly authorsTypeahead = metadataValueTypeahead('author');
+  private readonly categoriesTypeahead = metadataValueTypeahead('genre');
+  get filteredAuthors(): string[] { return this.authorsTypeahead.results(); }
+  get filteredCategories(): string[] { return this.categoriesTypeahead.results(); }
 
   coverUrl: string | null = null;
   isLoading = signal(false);
@@ -80,17 +81,11 @@ export class AddPhysicalBookDialogComponent {
   }
 
   filterAuthors(event: AutoCompleteCompleteEvent): void {
-    const query = event.query.toLowerCase();
-    this.filteredAuthors = this.allAuthors.filter((author) =>
-      author.toLowerCase().includes(query)
-    );
+    this.authorsTypeahead.filter(event);
   }
 
   filterCategories(event: AutoCompleteCompleteEvent): void {
-    const query = event.query.toLowerCase();
-    this.filteredCategories = this.allCategories.filter((category) =>
-      category.toLowerCase().includes(query)
-    );
+    this.categoriesTypeahead.filter(event);
   }
 
   onAutoCompleteKeyUp(fieldName: 'authors' | 'categories', event: KeyboardEvent): void {

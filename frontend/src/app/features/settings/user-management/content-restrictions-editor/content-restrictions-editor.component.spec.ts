@@ -1,10 +1,10 @@
-import {provideZonelessChangeDetection, signal} from '@angular/core';
+import {provideZonelessChangeDetection} from '@angular/core';
 import {ComponentFixture, TestBed} from '@angular/core/testing';
 import {MessageService} from '@openng/optimus-ui/api';
-import {Subject} from 'rxjs';
+import {of, Subject} from 'rxjs';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
-import {BookService} from '../../../book/service/book.service';
+import {MetadataValuesService} from '../../../metadata/component/metadata-manager/metadata-values.service';
 import {getTranslocoModule} from '../../../../core/testing/transloco-testing';
 import {ContentRestriction, ContentRestrictionMode, ContentRestrictionType} from '../content-restriction.model';
 import {ContentRestrictionService} from '../content-restriction.service';
@@ -48,16 +48,9 @@ describe('ContentRestrictionsEditorComponent', () => {
           },
         },
         {
-          provide: BookService,
+          provide: MetadataValuesService,
           useValue: {
-            uniqueMetadata: signal({
-              categories: [],
-              tags: ['Loaded tag'],
-              moods: [],
-              authors: [],
-              publishers: [],
-              series: [],
-            }),
+            search: vi.fn((field: string) => of(field === 'tag' ? ['Loaded tag'] : [])),
           },
         },
         {

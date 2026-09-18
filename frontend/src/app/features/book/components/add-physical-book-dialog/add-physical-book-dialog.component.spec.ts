@@ -2,7 +2,7 @@ import {signal} from '@angular/core';
 import {TestBed} from '@angular/core/testing';
 import type {AutoCompleteCompleteEvent} from '@openng/optimus-ui/autocomplete';
 import {DynamicDialogConfig, DynamicDialogRef} from '@openng/optimus-ui/dynamicdialog';
-import {Observable, Subject, throwError} from 'rxjs';
+import {Observable, of, Subject, throwError} from 'rxjs';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 
 import {Book, BookMetadata} from '../../model/book.model';
@@ -10,6 +10,7 @@ import {Library} from '../../model/library.model';
 import {BookMetadataService} from '../../service/book-metadata.service';
 import {BookService} from '../../service/book.service';
 import {LibraryService} from '../../service/library.service';
+import {MetadataValuesService} from '../../../metadata/component/metadata-manager/metadata-values.service';
 import {AddPhysicalBookDialogComponent} from './add-physical-book-dialog.component';
 
 describe('AddPhysicalBookDialogComponent', () => {
@@ -47,14 +48,8 @@ describe('AddPhysicalBookDialogComponent', () => {
   function createHarness(options: {
     dialogData?: {libraryId?: number};
     librariesData?: Library[];
-    metadataValues?: {
-      authors: string[];
-      categories: string[];
-      moods: string[];
-      tags: string[];
-      publishers: string[];
-      series: string[];
-    };
+    authors?: string[];
+    categories?: string[];
     lookupResult$?: Observable<BookMetadata>;
     createResult$?: Observable<Book>;
   } = {}) {
@@ -62,13 +57,14 @@ describe('AddPhysicalBookDialogComponent', () => {
       createLibrary({id: 1, name: 'Main Library'}),
       createLibrary({id: 2, name: 'Branch Library'}),
     ]);
-    const uniqueMetadata = signal(options.metadataValues ?? {
-      authors: ['Ursula Le Guin', 'Octavia Butler', 'Robin Hobb'],
-      categories: ['Science Fiction', 'Epic Fantasy', 'Mystery'],
-      moods: [],
-      tags: [],
-      publishers: [],
-      series: [],
+    const authors = options.authors ?? ['Ursula Le Guin', 'Octavia Butler', 'Robin Hobb'];
+    const categories = options.categories ?? ['Science Fiction', 'Epic Fantasy', 'Mystery'];
+    // Stands in for the server's prefix search - substring here is enough to prove the
+    // component forwards field/query to MetadataValuesService and renders what comes back.
+    const searchMetadataValues = vi.fn((field: string, query: string) => {
+      const source = field === 'author' ? authors : field === 'genre' ? categories : [];
+      const q = query.toLowerCase();
+      return of(source.filter(v => v.toLowerCase().includes(q)));
     });
     const lookupResult$ = options.lookupResult$ ?? new Subject<BookMetadata>();
     const createResult$ = options.createResult$ ?? new Subject<Book>();
@@ -80,7 +76,8 @@ describe('AddPhysicalBookDialogComponent', () => {
       providers: [
         {provide: DynamicDialogConfig, useValue: {data: options.dialogData ?? {}}},
         {provide: DynamicDialogRef, useValue: dialogRef},
-        {provide: BookService, useValue: {uniqueMetadata, createPhysicalBook}},
+        {provide: BookService, useValue: {createPhysicalBook}},
+        {provide: MetadataValuesService, useValue: {search: searchMetadataValues}},
         {provide: BookMetadataService, useValue: {lookupByIsbn}},
         {provide: LibraryService, useValue: {libraries}},
       ],
@@ -92,7 +89,7 @@ describe('AddPhysicalBookDialogComponent', () => {
     return {
       component,
       libraries,
-      uniqueMetadata,
+      searchMetadataValues,
       lookupResult$,
       createResult$,
       lookupByIsbn,
@@ -141,12 +138,14 @@ describe('AddPhysicalBookDialogComponent', () => {
     expect(component.selectedLibraryId).toBe(1);
   });
 
-  it('filters authors and categories with case-insensitive substring matches', () => {
-    const {component} = createHarness();
+  it('forwards author and category queries to server-side search and renders the results', () => {
+    const {component, searchMetadataValues} = createHarness();
 
     component.filterAuthors({query: 'taV', originalEvent: new Event('input')} as AutoCompleteCompleteEvent);
     component.filterCategories({query: 'fic', originalEvent: new Event('input')} as AutoCompleteCompleteEvent);
 
+    expect(searchMetadataValues).toHaveBeenCalledWith('author', 'taV', 20);
+    expect(searchMetadataValues).toHaveBeenCalledWith('genre', 'fic', 20);
     expect(component.filteredAuthors).toEqual(['Octavia Butler']);
     expect(component.filteredCategories).toEqual(['Science Fiction']);
   });

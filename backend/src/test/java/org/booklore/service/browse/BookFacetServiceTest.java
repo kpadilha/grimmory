@@ -5,6 +5,7 @@ import jakarta.persistence.PersistenceContext;
 import org.booklore.BookloreApplication;
 import org.booklore.browse.Link;
 import org.booklore.config.security.service.AuthenticationService;
+import org.booklore.exception.APIException;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
 import org.booklore.model.dto.browse.FacetGroupsResponse;
@@ -47,6 +48,7 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -627,5 +629,54 @@ class BookFacetServiceTest {
 
         List<FacetValueBookIds> genres = result.get("genre");
         assertThat(genres).extracting(FacetValueBookIds::value).containsExactlyInAnyOrder("Horror", "Romance");
+    }
+
+    @Test
+    void searchFacetValuesMatchesCaseInsensitivePrefix() {
+        book("A", "Horror", "Alice Adams");
+        book("B", "Horror", "Alan Turing");
+        book("C", "Romance", "Bob Marley");
+        em.flush();
+
+        assertThat(facetService.searchFacetValues("author", "al", 20))
+                .containsExactlyInAnyOrder("Alice Adams", "Alan Turing");
+    }
+
+    @Test
+    void searchFacetValuesCapsAtLimit() {
+        for (int i = 0; i < 10; i++) {
+            book("T" + i, "Genre" + i, "Author" + i);
+        }
+        em.flush();
+
+        assertThat(facetService.searchFacetValues("author", "", 3)).hasSize(3);
+    }
+
+    @Test
+    void searchFacetValuesNeverCrossesLibraryScope() {
+        LibraryEntity otherLibrary = LibraryEntity.builder().name("Other").icon("book").watch(false)
+                .formatPriority(List.of(BookFileType.EPUB)).build();
+        em.persist(otherLibrary);
+        LibraryPathEntity otherPath = LibraryPathEntity.builder().library(otherLibrary).path("/other").build();
+        em.persist(otherPath);
+        BookEntity otherBook = BookEntity.builder()
+                .library(otherLibrary).libraryPath(otherPath).addedOn(Instant.now()).deleted(false).build();
+        em.persist(otherBook);
+        BookMetadataEntity otherMetadata = BookMetadataEntity.builder().book(otherBook).title("Hidden").build();
+        otherMetadata.setAuthors(List.of(author("Hidden Author")));
+        em.persist(otherMetadata);
+        otherBook.setMetadata(otherMetadata);
+
+        book("Visible", "Horror", "Visible Author");
+        em.flush();
+
+        assertThat(facetService.searchFacetValues("author", "", 20)).containsExactly("Visible Author");
+    }
+
+    @Test
+    void searchFacetValuesRejectsUnknownFacet() {
+        assertThatThrownBy(() -> facetService.searchFacetValues("not-a-facet", "", 20))
+                .isInstanceOf(APIException.class)
+                .hasMessageContaining("Unknown facet");
     }
 }

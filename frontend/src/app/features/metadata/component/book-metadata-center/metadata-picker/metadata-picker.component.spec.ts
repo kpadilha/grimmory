@@ -8,7 +8,7 @@ import {CdkDragDrop} from '@angular/cdk/drag-drop';
 import {AutoCompleteSelectEvent} from '@openng/optimus-ui/autocomplete';
 
 import {Book, BookMetadata} from '../../../../book/model/book.model';
-import {BookService} from '../../../../book/service/book.service';
+import {MetadataValuesService} from '../../metadata-manager/metadata-values.service';
 import {BookMetadataManageService} from '../../../../book/service/book-metadata-manage.service';
 import {AppSettings} from '../../../../../shared/model/app-settings.model';
 import {AppSettingsService} from '../../../../../shared/service/app-settings.service';
@@ -18,14 +18,8 @@ import {MetadataUtilsService} from '../../../../../shared/metadata/metadata-util
 import {MetadataPickerComponent} from './metadata-picker.component';
 
 describe('MetadataPickerComponent', () => {
-  const uniqueMetadata = signal({
-    authors: ['Alice', 'Bob'],
-    categories: ['Fantasy', 'History'],
-    moods: ['Hopeful'],
-    tags: ['Epic'],
-    publishers: ['Orbit'],
-    series: ['Saga'],
-  });
+  const searchMetadataValues = vi.fn((field: string, query: string) =>
+    of(field === 'genre' && query === 'fan' ? ['Fantasy'] : []));
   const appSettings = signal<AppSettings | null>(null);
   const updateBookMetadata = vi.fn(() => of(void 0));
   const uploadAudiobookCoverFromUrl = vi.fn(() => of(void 0));
@@ -69,14 +63,7 @@ describe('MetadataPickerComponent', () => {
   }
 
   beforeEach(() => {
-    uniqueMetadata.set({
-      authors: ['Alice', 'Bob'],
-      categories: ['Fantasy', 'History'],
-      moods: ['Hopeful'],
-      tags: ['Epic'],
-      publishers: ['Orbit'],
-      series: ['Saga'],
-    });
+    searchMetadataValues.mockClear();
     appSettings.set(null);
     updateBookMetadata.mockClear();
     uploadAudiobookCoverFromUrl.mockClear();
@@ -92,7 +79,7 @@ describe('MetadataPickerComponent', () => {
         MetadataFormBuilder,
         MetadataUtilsService,
         {provide: AppSettingsService, useValue: {appSettings}},
-        {provide: BookService, useValue: {uniqueMetadata}},
+        {provide: MetadataValuesService, useValue: {search: searchMetadataValues}},
         {
           provide: BookMetadataManageService,
           useValue: {updateBookMetadata, uploadAudiobookCoverFromUrl, supportsDualCovers},

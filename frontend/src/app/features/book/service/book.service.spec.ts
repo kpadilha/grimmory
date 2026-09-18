@@ -6,7 +6,7 @@ import {MessageService} from '@openng/optimus-ui/api';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {firstValueFrom} from 'rxjs';
 
-import {createAuthServiceStub, createQueryClientHarness, flushSignalAndQueryEffects, flushQueryAsync} from '../../../core/testing/query-testing';
+import {createAuthServiceStub, createQueryClientHarness, flushSignalAndQueryEffects} from '../../../core/testing/query-testing';
 import type {Book, BookMetadata} from '../model/book.model';
 import {AuthService} from '../../../shared/service/auth.service';
 import {BookPatchService} from './book-patch.service';
@@ -48,18 +48,6 @@ function facetGroupsResponse(groups: Record<string, string[]>) {
 // authenticates picks up this request regardless of whether it cares about the counts.
 function flushFacetsRequest(httpTestingController: HttpTestingController, groups: Record<string, string[]> = {}): void {
   httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets')).flush(facetGroupsResponse(groups));
-}
-
-function facetValuesResponse(groups: Record<string, string[]>) {
-  return Object.fromEntries(
-    Object.entries(groups).map(([key, values]) => [key, values.map(value => ({value, bookIds: []}))]),
-  );
-}
-
-// uniqueMetadata's source (author/genre/mood/tag/publisher/series autocomplete values) is also
-// eager and token-gated only, same as the facets request above.
-function flushMetadataValuesRequest(httpTestingController: HttpTestingController, groups: Record<string, string[]> = {}): void {
-  httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets/values')).flush(facetValuesResponse(groups));
 }
 
 describe('BookService', () => {
@@ -138,51 +126,21 @@ describe('BookService', () => {
     setup();
 
     flushFacetsRequest(httpTestingController);
-    flushMetadataValuesRequest(httpTestingController);
     httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
   });
 
-  it('derives uniqueMetadata from the uncapped facet values, never the full collection', async () => {
+  // Regression test for the /facets/values full-load that boot-time uniqueMetadata used to
+  // trigger (7.7MB, every bookId per value) - autocompletes now search server-side on demand.
+  it('never requests the exhaustive facet-values list at boot', () => {
     setup();
 
     flushFacetsRequest(httpTestingController);
-    flushMetadataValuesRequest(httpTestingController, {
-      author: ['Le Guin', 'Pratchett'],
-      genre: ['Fantasy', 'Humor'],
-      mood: ['Calm', 'Funny'],
-      tag: ['Classic', 'Satire'],
-      publisher: ['Ace', 'Corgi'],
-      series: ['Earthsea', 'Discworld'],
-    });
-    await flushQueryAsync();
-
-    expect(service.uniqueMetadata()).toEqual({
-      authors: ['Le Guin', 'Pratchett'],
-      categories: ['Fantasy', 'Humor'],
-      moods: ['Calm', 'Funny'],
-      tags: ['Classic', 'Satire'],
-      publishers: ['Ace', 'Corgi'],
-      series: ['Earthsea', 'Discworld'],
-    });
-    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books'));
-  });
-
-  it('keeps every author beyond the /facets 100-per-group cap, so autocomplete never drops an existing value', async () => {
-    setup();
-
-    const authors = Array.from({length: 150}, (_, i) => `Author ${i}`);
-    flushFacetsRequest(httpTestingController);
-    flushMetadataValuesRequest(httpTestingController, {author: authors, genre: [], mood: [], tag: [], publisher: [], series: []});
-    await flushQueryAsync();
-
-    expect(service.uniqueMetadata().authors).toHaveLength(150);
-    expect(service.uniqueMetadata().authors).toContain('Author 149');
+    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books/facets/values'));
   });
 
   it('resolves a selection by id from /books/batch, never the full collection', async () => {
     setup();
     flushFacetsRequest(httpTestingController);
-    flushMetadataValuesRequest(httpTestingController);
 
     const promise = service.getBooksByIds([2, 999, 1]);
     const request = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/batch'));
@@ -199,7 +157,6 @@ describe('BookService', () => {
   it('returns immediately without a request for an empty selection', async () => {
     setup();
     flushFacetsRequest(httpTestingController);
-    flushMetadataValuesRequest(httpTestingController);
 
     await expect(service.getBooksByIds([])).resolves.toEqual([]);
   });
@@ -207,7 +164,6 @@ describe('BookService', () => {
   it('pages /books/page scoped to the series facet for getBooksInSeries, never the full collection', async () => {
     setup();
     flushFacetsRequest(httpTestingController);
-    flushMetadataValuesRequest(httpTestingController);
 
     const promise = firstValueFrom(service.getBooksInSeries('Earthsea'));
 
@@ -228,7 +184,6 @@ describe('BookService', () => {
   it('resolves an empty series without a request', async () => {
     setup();
     flushFacetsRequest(httpTestingController);
-    flushMetadataValuesRequest(httpTestingController);
 
     await expect(firstValueFrom(service.getBooksInSeries(''))).resolves.toEqual([]);
   });
@@ -236,7 +191,6 @@ describe('BookService', () => {
   it('invalidates the app-books browse caches when a shelf is removed, never a full collection cache', () => {
     setup();
     flushFacetsRequest(httpTestingController);
-    flushMetadataValuesRequest(httpTestingController);
 
     const invalidateSpy = vi.spyOn(queryClientHarness.queryClient, 'invalidateQueries');
 

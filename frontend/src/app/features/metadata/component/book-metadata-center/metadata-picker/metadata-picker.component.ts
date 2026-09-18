@@ -1,4 +1,4 @@
-import {Component, computed, DestroyRef, effect, EventEmitter, inject, Input, Output} from '@angular/core';
+import {Component, DestroyRef, effect, EventEmitter, inject, Input, Output} from '@angular/core';
 import {Book, BookMetadata, ComicMetadata, MetadataClearFlags, MetadataUpdateWrapper} from '../../../../book/model/book.model';
 import {MessageService} from '@openng/optimus-ui/api';
 import {CdkDragDrop, CdkDropList, CdkDrag, moveItemInArray} from '@angular/cdk/drag-drop';
@@ -8,7 +8,6 @@ import {InputText} from '@openng/optimus-ui/inputtext';
 import {forkJoin, Observable} from 'rxjs';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {UrlHelperService} from '../../../../../shared/service/url-helper.service';
-import {BookService} from '../../../../book/service/book.service';
 import {BookMetadataManageService} from '../../../../book/service/book-metadata-manage.service';
 import {Textarea} from '@openng/optimus-ui/textarea';
 
@@ -20,6 +19,7 @@ import {AppSettingsService} from '../../../../../shared/service/app-settings.ser
 import {MetadataProviderSpecificFields} from '../../../../../shared/model/app-settings.model';
 import {ALL_COMIC_METADATA_FIELDS, ALL_METADATA_FIELDS, AUDIOBOOK_METADATA_FIELDS, COMIC_ARRAY_METADATA_FIELDS, COMIC_FORM_TO_MODEL_LOCK, COMIC_TEXT_METADATA_FIELDS, COMIC_TEXTAREA_METADATA_FIELDS, getArrayFields, getBookDetailsFields, getBottomFields, getProviderFields, getSeriesFields, getTextareaFields, getTopFields, MetadataFieldConfig, MetadataFormBuilder, MetadataUtilsService} from '../../../../../shared/metadata';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
+import {metadataValueTypeahead} from '../../metadata-manager/metadata-values.service';
 
 @Component({
   selector: 'app-metadata-picker',
@@ -89,8 +89,14 @@ export class MetadataPickerComponent {
 
   currentBook: Book | null = null;
 
-  private get allItems(): Record<string, string[]> { return this.uniqueMetadata(); }
-  filteredItems: Record<string, string[]> = {};
+  // Server-side typeahead per array field - never the full metadata vocabulary loaded up front.
+  // Comic array fields (comic_character, ...) have no typeahead backing and stay empty, as before.
+  private readonly typeaheadByControl: Record<string, ReturnType<typeof metadataValueTypeahead>> = {
+    authors: metadataValueTypeahead('author'),
+    categories: metadataValueTypeahead('genre'),
+    moods: metadataValueTypeahead('mood'),
+    tags: metadataValueTypeahead('tag'),
+  };
   authorInputValue = '';
 
   metadataForm!: FormGroup;
@@ -102,7 +108,6 @@ export class MetadataPickerComponent {
   hoveredFields: Record<string, boolean> = {};
 
   private messageService = inject(MessageService);
-  private bookService = inject(BookService);
   private bookMetadataManageService = inject(BookMetadataManageService);
   protected urlHelper = inject(UrlHelperService);
   private destroyRef = inject(DestroyRef);
@@ -110,8 +115,6 @@ export class MetadataPickerComponent {
   private formBuilder = inject(MetadataFormBuilder);
   private metadataUtils = inject(MetadataUtilsService);
   private readonly t = inject(TranslocoService);
-  private readonly uniqueMetadata = computed(() => this.bookService.uniqueMetadata());
-
 
   private enabledProviderFields: MetadataProviderSpecificFields | null = null;
 
@@ -143,13 +146,11 @@ export class MetadataPickerComponent {
   }
 
   getFiltered(controlName: string): string[] {
-    return this.filteredItems[controlName] ?? [];
+    return this.typeaheadByControl[controlName]?.results() ?? [];
   }
 
   filterItems(event: { query: string }, controlName: string): void {
-    const query = event.query.toLowerCase();
-    this.filteredItems[controlName] = (this.allItems[controlName] ?? [])
-      .filter(item => item.toLowerCase().includes(query));
+    this.typeaheadByControl[controlName]?.filter(event);
   }
 
   private readonly syncProviderFieldsEffect = effect(() => {

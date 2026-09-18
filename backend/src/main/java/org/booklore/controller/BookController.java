@@ -131,6 +131,16 @@ public class BookController {
         return ResponseEntity.ok(bookFacetService.getFacetValueBookIds(facet));
     }
 
+    @Operation(summary = "Search facet values", description = "Distinct values for one facet key matching a case-insensitive prefix, scoped like the other browse endpoints and capped at limit - backs typeahead inputs, which must never download the exhaustive value/book-id list /facets/values returns.")
+    @ApiResponse(responseCode = "200", description = "Matching facet values returned successfully")
+    @GetMapping("/metadata-values")
+    public ResponseEntity<List<String>> searchMetadataValues(
+            @Parameter(description = "Facet key to search, e.g. author, genre, tag, mood, publisher, series") @RequestParam String field,
+            @Parameter(description = "Case-insensitive prefix to match") @RequestParam(required = false, defaultValue = "") String query,
+            @Parameter(description = "Max results, capped at 200") @RequestParam(required = false, defaultValue = "20") @Min(1) @Max(200) int limit) {
+        return ResponseEntity.ok(bookFacetService.searchFacetValues(field, query, limit));
+    }
+
     @Operation(summary = "Get series summaries (paginated)", description = "Aggregated per-series data (covers, authors, categories, progress) for the series browser grid, scoped like the other browse endpoints. Sort/search/status filtering all run server-side; only the requested page's covers and authors are hydrated.")
     @ApiResponse(responseCode = "200", description = "Page of series summaries returned successfully")
     @GetMapping("/series/summary")

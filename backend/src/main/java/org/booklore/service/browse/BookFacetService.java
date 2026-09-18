@@ -188,6 +188,40 @@ public class BookFacetService {
         return result;
     }
 
+    // Distinct values for one facet key matching a case-insensitive prefix, scoped like the other
+    // browse endpoints and capped at limit - backs typeahead inputs, never the exhaustive value list.
+    public List<String> searchFacetValues(String facetKey, String query, int limit) {
+        BookLoreUser user = authenticationService.getAuthenticatedUser();
+        Long userId = user.getId();
+        boolean isAdmin = user.getPermissions().isAdmin();
+        Set<Long> libraryIds = BookFilterSpecifications.libraryIds(user);
+
+        FacetDef def = FACETS.stream().filter(f -> f.key().equals(facetKey)).findFirst()
+                .orElseThrow(() -> ApiError.INVALID_FACET.createException("Unknown facet: " + facetKey));
+        Specification<BookEntity> base = filterSpecifications.base(null, Map.of(), FacetLogic.AND, userId, isAdmin, libraryIds, facetKey);
+
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<String> cq = cb.createQuery(String.class);
+        Root<BookEntity> root = cq.from(BookEntity.class);
+        Expression<String> value = def.value().apply(cb, root, userId).as(String.class);
+
+        List<Predicate> predicates = new ArrayList<>();
+        Predicate basePredicate = base.toPredicate(root, cq, cb);
+        if (basePredicate != null) {
+            predicates.add(basePredicate);
+        }
+        predicates.add(cb.isNotNull(value));
+        if (query != null && !query.isBlank()) {
+            predicates.add(cb.like(cb.lower(value), query.toLowerCase() + "%"));
+        }
+
+        cq.select(value).distinct(true);
+        cq.where(predicates.toArray(Predicate[]::new));
+        cq.orderBy(cb.asc(value));
+
+        return entityManager.createQuery(cq).setMaxResults(limit).getResultList();
+    }
+
     private List<FacetValueBookIds> valueBookIds(FacetDef def, Specification<BookEntity> base, Long userId) {
         CriteriaBuilder cb = entityManager.getCriteriaBuilder();
         CriteriaQuery<Tuple> cq = cb.createTupleQuery();

@@ -1,4 +1,4 @@
-import {Component, computed, inject, OnInit} from '@angular/core';
+import {Component, inject, OnInit} from '@angular/core';
 import {FormBuilder, FormGroup, FormsModule, ReactiveFormsModule} from '@angular/forms';
 
 import {InputText} from '@openng/optimus-ui/inputtext';
@@ -14,6 +14,7 @@ import {Checkbox} from '@openng/optimus-ui/checkbox';
 import {AutoComplete} from '@openng/optimus-ui/autocomplete';
 import {AutoCompleteSelectEvent} from '@openng/optimus-ui/autocomplete';
 import {ProgressSpinner} from '@openng/optimus-ui/progressspinner';
+import {metadataValueTypeahead} from '../metadata-manager/metadata-values.service';
 
 @Component({
   selector: 'app-bulk-metadata-update-component',
@@ -62,61 +63,44 @@ export class BulkMetadataUpdateComponent implements OnInit {
   private readonly bookService = inject(BookService);
   private readonly bookMetadataManageService = inject(BookMetadataManageService);
   private readonly messageService = inject(MessageService);
-  private readonly uniqueMetadata = computed(() => this.bookService.uniqueMetadata());
 
-  get allAuthors(): string[] { return this.uniqueMetadata().authors; }
-  get allGenres(): string[] { return this.uniqueMetadata().categories; }
-  get allMoods(): string[] { return this.uniqueMetadata().moods; }
-  get allTags(): string[] { return this.uniqueMetadata().tags; }
-  get allPublishers(): string[] { return this.uniqueMetadata().publishers; }
-  get allSeries(): string[] { return this.uniqueMetadata().series; }
-  filteredGenres: string[] = [];
-  filteredAuthors: string[] = [];
-  filteredMoods: string[] = [];
-  filteredTags: string[] = [];
-  filteredPublishers: string[] = [];
-  filteredSeries: string[] = [];
+  // Server-side typeahead per field - never the full metadata vocabulary loaded up front.
+  private readonly authorsTypeahead = metadataValueTypeahead('author');
+  private readonly genresTypeahead = metadataValueTypeahead('genre');
+  private readonly moodsTypeahead = metadataValueTypeahead('mood');
+  private readonly tagsTypeahead = metadataValueTypeahead('tag');
+  private readonly publishersTypeahead = metadataValueTypeahead('publisher');
+  private readonly seriesTypeahead = metadataValueTypeahead('series');
+
+  get filteredGenres(): string[] { return this.genresTypeahead.results(); }
+  get filteredAuthors(): string[] { return this.authorsTypeahead.results(); }
+  get filteredMoods(): string[] { return this.moodsTypeahead.results(); }
+  get filteredTags(): string[] { return this.tagsTypeahead.results(); }
+  get filteredPublishers(): string[] { return this.publishersTypeahead.results(); }
+  get filteredSeries(): string[] { return this.seriesTypeahead.results(); }
 
   filterGenres(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredGenres = this.allGenres.filter((cat) =>
-      cat.toLowerCase().includes(query)
-    );
+    this.genresTypeahead.filter(event);
   }
 
   filterAuthors(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredAuthors = this.allAuthors.filter((author) =>
-      author.toLowerCase().includes(query)
-    );
+    this.authorsTypeahead.filter(event);
   }
 
   filterMoods(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredMoods = this.allMoods.filter((mood) =>
-      mood.toLowerCase().includes(query)
-    );
+    this.moodsTypeahead.filter(event);
   }
 
   filterTags(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredTags = this.allTags.filter((tag) =>
-      tag.toLowerCase().includes(query)
-    );
+    this.tagsTypeahead.filter(event);
   }
 
   filterPublishers(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredPublishers = this.allPublishers.filter((publisher) =>
-      publisher.toLowerCase().includes(query)
-    );
+    this.publishersTypeahead.filter(event);
   }
 
   filterSeries(event: { query: string }) {
-    const query = event.query.toLowerCase();
-    this.filteredSeries = this.allSeries.filter((seriesName) =>
-      seriesName.toLowerCase().includes(query)
-    );
+    this.seriesTypeahead.filter(event);
   }
 
   async ngOnInit(): Promise<void> {
