@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.mock;
 import org.springframework.boot.test.context.TestConfiguration;
 
@@ -186,6 +187,41 @@ class BookOpdsRepositoryDataJpaTest {
         Page<Book> authorPage0 = opdsBookService.getBooksPage(admin.getId(), null, null, null, 0, 2, OpdsSortOrder.AUTHOR_ASC);
         Page<Book> authorPage1 = opdsBookService.getBooksPage(admin.getId(), null, null, null, 1, 2, OpdsSortOrder.AUTHOR_ASC);
         assertThat(concatAuthors(authorPage0, authorPage1)).isEqualTo(List.of("Alpha", "Bravo", "Charlie", "Delta"));
+    }
+
+    /**
+     * Regression for the OPDS 500: QueryUtils prefixes the root alias onto an ORDER BY term
+     * holding no literal '(' and no known alias, so a bare CASE became `b.CASE` and failed to
+     * parse as HQL. Every OpdsSortOrder must build and execute a catalogue query without
+     * throwing. This asserts executability only, not the resulting order.
+     */
+    @Test
+    void getBooksPage_buildsAndExecutesForEverySortOrder() {
+        BookLoreUserEntity admin = BookLoreUserEntity.builder()
+                .username("admin-allsort-test")
+                .passwordHash("hash")
+                .isDefaultPassword(false)
+                .name("Admin")
+                .createdAt(LocalDateTime.now())
+                .build();
+        entityManager.persist(admin);
+        entityManager.persist(UserPermissionsEntity.builder().user(admin).permissionAdmin(true).build());
+
+        LibraryEntity library = LibraryEntity.builder().name("AllSort Test Library").icon("book").watch(false).build();
+        entityManager.persist(library);
+        LibraryPathEntity libraryPath = LibraryPathEntity.builder().library(library).path("/allsort/test").build();
+        entityManager.persist(libraryPath);
+        entityManager.flush();
+
+        persistBook(library, libraryPath, "Echo", "Echo", Instant.now());
+        entityManager.flush();
+        entityManager.clear();
+
+        for (OpdsSortOrder sortOrder : OpdsSortOrder.values()) {
+            assertThatCode(() -> opdsBookService.getBooksPage(admin.getId(), null, null, null, 0, 10, sortOrder))
+                    .as("sort order %s must build and execute without throwing", sortOrder)
+                    .doesNotThrowAnyException();
+        }
     }
 
     private void persistBook(LibraryEntity library, LibraryPathEntity libraryPath, String title, String authorName, Instant addedOn) {

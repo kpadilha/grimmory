@@ -538,7 +538,9 @@ public class OpdsBookService {
     private static Sort seriesSort(Sort.Direction direction) {
         return JpaSort.unsafe(Sort.Direction.ASC, "CASE WHEN COALESCE(m.seriesName, '') = '' THEN 1 ELSE 0 END")
                 .andUnsafe(direction, "m.seriesName")
-                .andUnsafe(Sort.Direction.ASC, "CASE WHEN m.seriesNumber IS NULL THEN 1 ELSE 0 END")
+                // QueryUtils#getOrderClause prefixes the root alias onto any ORDER BY term that
+                // neither contains a literal '(' nor starts with a known alias: `b.CASE` won't parse.
+                .andUnsafe(Sort.Direction.ASC, "(CASE WHEN m.seriesNumber IS NULL THEN 1 ELSE 0 END)")
                 .andUnsafe(direction, "m.seriesNumber")
                 .andUnsafe(Sort.Direction.ASC, "b.id");
     }
