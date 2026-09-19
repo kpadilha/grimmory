@@ -116,13 +116,14 @@ public class BookFacetService {
             // Physical books carry no bookFiles row, so file_type joins bookFiles and layers
             // isPhysical on top - otherwise "PHYSICAL" never gets a facet value at all.
             new FacetDef("file_type", "File Type", (cb, root, userId) -> {
-                Path<?> bookType = root.join("bookFiles", JoinType.LEFT).get("bookType");
+                Join<BookEntity, BookFileEntity> files = root.join("bookFiles", JoinType.LEFT);
+                files.on(cb.isTrue(files.get("isBookFormat")));
                 // A SQL CAST (not just the Java-side .as()) keeps both branches the same wire
                 // type - H2 infers CASE result type from the ENUM column otherwise and rejects
                 // the "PHYSICAL" literal; MariaDB, where book_type is plain varchar, is unaffected.
                 return cb.<String>selectCase()
                         .when(cb.isTrue(root.get("isPhysical")), "PHYSICAL")
-                        .otherwise(bookType.cast(String.class));
+                        .otherwise(files.get("bookType").cast(String.class));
             }),
             new FacetDef("content_rating", "Content Rating", (cb, root, userId) -> metadata(root).get("contentRating")),
             new FacetDef("amazon_rating", "Amazon Rating", (cb, root, userId) -> bucketExpr(cb, metadata(root).<Double>get("amazonRating"), NumericFacetBuckets.RATING_5)),
