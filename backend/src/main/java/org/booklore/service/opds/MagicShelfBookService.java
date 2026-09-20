@@ -14,9 +14,10 @@ import org.booklore.model.entity.BookLoreUserEntity;
 import org.booklore.model.entity.MagicShelfEntity;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.MagicShelfRepository;
+import org.booklore.repository.UserContentRestrictionRepository;
 import org.booklore.repository.UserRepository;
+import org.booklore.security.policy.ContentRestrictionSpecification;
 import org.booklore.service.BookRuleEvaluatorService;
-import org.booklore.service.restriction.ContentRestrictionService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -43,7 +44,7 @@ public class MagicShelfBookService {
     private final UserRepository userRepository;
     private final BookLoreUserTransformer bookLoreUserTransformer;
     private final BookRuleEvaluatorService ruleEvaluatorService;
-    private final ContentRestrictionService contentRestrictionService;
+    private final UserContentRestrictionRepository restrictionRepository;
     private final ObjectMapper objectMapper;
 
     private record ShelfAccess(MagicShelfEntity shelf, BookLoreUserEntity user) {}
@@ -56,8 +57,7 @@ public class MagicShelfBookService {
 
             Page<BookEntity> booksPage = bookRepository.findAll(specification, pageable);
 
-            List<BookEntity> filteredEntities = contentRestrictionService.applyRestrictions(booksPage.getContent(), userId);
-            List<Book> books = filteredEntities.stream()
+            List<Book> books = booksPage.getContent().stream()
                     .map(bookMapper::toBook)
                     .map(book -> filterBook(book, userId))
                     .toList();
@@ -75,7 +75,9 @@ public class MagicShelfBookService {
         try {
             GroupRule groupRule = objectMapper.readValue(access.shelf().getFilterJson(), GroupRule.class);
             Specification<BookEntity> specification = ruleEvaluatorService.toSpecification(groupRule, userId);
-            return specification.and(createLibraryFilterSpecification(access.user()));
+            return specification
+                    .and(createLibraryFilterSpecification(access.user()))
+                    .and(restrictionFor(userId));
         } catch (APIException e) {
             throw e;
         } catch (Exception e) {
@@ -89,22 +91,23 @@ public class MagicShelfBookService {
     }
 
     public List<Long> getBookIdsByMagicShelfId(Long userId, Long magicShelfId, int limit) {
-        ShelfAccess access = validateMagicShelfAccess(userId, magicShelfId);
         try {
-            GroupRule groupRule = objectMapper.readValue(access.shelf().getFilterJson(), GroupRule.class);
-            Specification<BookEntity> specification = ruleEvaluatorService.toSpecification(groupRule, userId);
-            specification = specification.and(createLibraryFilterSpecification(access.user()));
-
+            Specification<BookEntity> specification = toSpecification(userId, magicShelfId);
             Pageable pageable = PageRequest.of(0, limit);
             Page<BookEntity> booksPage = bookRepository.findAll(specification, pageable);
-            List<BookEntity> filtered = contentRestrictionService.applyRestrictions(booksPage.getContent(), userId);
-            return filtered.stream().map(BookEntity::getId).toList();
+            return booksPage.getContent().stream().map(BookEntity::getId).toList();
         } catch (APIException e) {
             throw e;
         } catch (Exception e) {
             log.error("Failed to parse or execute magic shelf rules", e);
             throw new RuntimeException("Failed to parse or execute magic shelf rules: " + e.getMessage(), e);
         }
+    }
+
+    // userId is null only for anonymous access to a public shelf (validateMagicShelfAccess); there is
+    // no user to restrict, so ContentRestrictionSpecification.from(List.of()) adds no subquery.
+    private Specification<BookEntity> restrictionFor(Long userId) {
+        return ContentRestrictionSpecification.from(userId == null ? List.of() : restrictionRepository.findByUserId(userId));
     }
 
     public String getMagicShelfName(Long magicShelfId) {
