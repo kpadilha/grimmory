@@ -12,6 +12,7 @@ import org.booklore.model.entity.UserPermissionsEntity;
 import org.booklore.repository.BookOpdsRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.ShelfRepository;
+import org.booklore.repository.UserContentRestrictionRepository;
 import org.booklore.repository.UserRepository;
 import org.booklore.service.library.LibraryService;
 import org.booklore.service.opds.OpdsBookService;
@@ -46,6 +47,7 @@ class OpdsBookServiceTest {
     @Mock private ShelfRepository shelfRepository;
     @Mock private LibraryService libraryService;
     @Mock private ContentRestrictionService contentRestrictionService;
+    @Mock private UserContentRestrictionRepository restrictionRepository;
 
     @InjectMocks private OpdsBookService opdsBookService;
 
@@ -56,6 +58,7 @@ class OpdsBookServiceTest {
         mocks = MockitoAnnotations.openMocks(this);
         when(contentRestrictionService.applyRestrictions(anyList(), anyLong()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        when(restrictionRepository.findByUserId(anyLong())).thenReturn(List.of());
     }
 
     @AfterEach
@@ -159,17 +162,15 @@ class OpdsBookServiceTest {
         when(shelf.getUser()).thenReturn(shelfUser);
         when(shelfRepository.findByIdWithUser(2L)).thenReturn(Optional.of(shelf));
 
-        when(bookOpdsRepository.findBookIds(any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findRecentBookIds(any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByLibraryIds(anySet(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByShelfId(anyLong(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), anySet(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByMetadataSearch(anyString(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByMetadataSearchAndLibraryIds(anyString(), anySet(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByMetadataSearchAndShelfIds(anyString(), anySet(), anySet(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIds(any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findRecentBookIds(any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByLibraryIds(anySet(), any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), anySet(), any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByMetadataSearch(anyString(), any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByMetadataSearchAndLibraryIds(anyString(), anySet(), any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByMetadataSearchAndShelfIds(anyString(), anySet(), anySet(), any(), any(), any())).thenReturn(Page.empty());
         when(bookOpdsRepository.findAllWithMetadataByIds(anyList())).thenReturn(List.of());
         when(bookOpdsRepository.findAllWithMetadataByIdsAndLibraryIds(anyList(), anySet())).thenReturn(List.of());
-        when(bookOpdsRepository.findAllWithMetadataByIdsAndShelfId(anyList(), anyLong())).thenReturn(List.of());
         when(bookOpdsRepository.findAllWithMetadataByIdsAndShelfIds(anyList(), anySet(), anySet())).thenReturn(List.of());
         when(bookOpdsRepository.findAllWithFullMetadataByIds(anyList())).thenReturn(List.of());
         when(bookOpdsRepository.findAllWithFullMetadataByIdsAndLibraryIds(anyList(), anySet())).thenReturn(List.of());
@@ -181,16 +182,14 @@ class OpdsBookServiceTest {
     @Test
     void getBooksPage_v2User_delegatesToV2Method() {
         OpdsUserDetails details = v2UserDetails(1L, true, Set.of(1L));
-        when(bookOpdsRepository.findBookIds(any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findRecentBookIds(any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByLibraryIds(anySet(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByShelfId(anyLong(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), anySet(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByMetadataSearch(anyString(), any())).thenReturn(Page.empty());
-        when(bookOpdsRepository.findBookIdsByMetadataSearchAndShelfIds(anyString(), anySet(), anySet(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIds(any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findRecentBookIds(any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByLibraryIds(anySet(), any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), anySet(), any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByMetadataSearch(anyString(), any(), any(), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByMetadataSearchAndShelfIds(anyString(), anySet(), anySet(), any(), any(), any())).thenReturn(Page.empty());
         when(bookOpdsRepository.findAllWithMetadataByIds(anyList())).thenReturn(List.of());
         when(bookOpdsRepository.findAllWithMetadataByIdsAndLibraryIds(anyList(), anySet())).thenReturn(List.of());
-        when(bookOpdsRepository.findAllWithMetadataByIdsAndShelfId(anyList(), anyLong())).thenReturn(List.of());
         when(bookOpdsRepository.findAllWithMetadataByIdsAndShelfIds(anyList(), anySet(), anySet())).thenReturn(List.of());
         when(bookOpdsRepository.findAllWithFullMetadataByIds(anyList())).thenReturn(List.of());
         when(bookOpdsRepository.findAllWithFullMetadataByIdsAndLibraryIds(anyList(), anySet())).thenReturn(List.of());
@@ -229,7 +228,7 @@ class OpdsBookServiceTest {
         when(user.getPermissions()).thenReturn(perms);
         when(perms.isAdmin()).thenReturn(true);
 
-        when(bookOpdsRepository.findRecentBookIds(any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findRecentBookIds(any(), any(), any())).thenReturn(Page.empty());
         when(bookOpdsRepository.findAllWithMetadataByIds(anyList())).thenReturn(List.of());
 
         opdsBookService.getRecentBooksPage(details.getOpdsUserV2().getUserId(), 0, 10);
@@ -252,7 +251,7 @@ class OpdsBookServiceTest {
         BookEntity bookEntity = mock(BookEntity.class);
         when(bookEntity.getId()).thenReturn(1L);
 
-        when(bookOpdsRepository.findRecentBookIdsByLibraryIds(anySet(), any())).thenReturn(new PageImpl<>(List.of(1L)));
+        when(bookOpdsRepository.findRecentBookIdsByLibraryIds(anySet(), any(), any(), any())).thenReturn(new PageImpl<>(List.of(1L)));
         when(bookOpdsRepository.findAllWithMetadataByIdsAndLibraryIds(anyList(), anySet())).thenReturn(List.of(bookEntity));
         when(bookMapper.toBook(bookEntity)).thenReturn(book);
 
@@ -370,13 +369,13 @@ class OpdsBookServiceTest {
         Book book = Book.builder().id(1L).build();
         when(bookMapper.toBook(bookEntity)).thenReturn(book);
 
-        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), eq(Set.of(10L)), any())).thenReturn(new PageImpl<>(List.of(1L)));
+        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), eq(Set.of(10L)), any(), any(), any())).thenReturn(new PageImpl<>(List.of(1L)));
         when(bookOpdsRepository.findAllWithMetadataByIdsAndShelfIds(eq(List.of(1L)), anySet(), eq(Set.of(10L)))).thenReturn(List.of(bookEntity));
 
         Page<Book> result = opdsBookService.getBooksPage(1L, null, null, Set.of(10L), 0, 10);
 
         assertThat(result.getContent()).hasSize(1);
-        verify(bookOpdsRepository).findBookIdsByShelfIds(anySet(), eq(Set.of(10L)), any());
+        verify(bookOpdsRepository).findBookIdsByShelfIds(anySet(), eq(Set.of(10L)), any(), any(), any());
     }
 
     @Test
@@ -416,13 +415,13 @@ class OpdsBookServiceTest {
         when(bookMapper.toBook(bookEntity1)).thenReturn(book1);
         when(bookMapper.toBook(bookEntity2)).thenReturn(book2);
 
-        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), eq(Set.of(10L, 20L)), any())).thenReturn(new PageImpl<>(List.of(1L, 2L)));
+        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), eq(Set.of(10L, 20L)), any(), any(), any())).thenReturn(new PageImpl<>(List.of(1L, 2L)));
         when(bookOpdsRepository.findAllWithMetadataByIdsAndShelfIds(eq(List.of(1L, 2L)), anySet(), eq(Set.of(10L, 20L)))).thenReturn(List.of(bookEntity1, bookEntity2));
 
         Page<Book> result = opdsBookService.getBooksPage(1L, null, null, Set.of(10L, 20L), 0, 10);
 
         assertThat(result.getContent()).hasSize(2);
-        verify(bookOpdsRepository).findBookIdsByShelfIds(anySet(), eq(Set.of(10L, 20L)), any());
+        verify(bookOpdsRepository).findBookIdsByShelfIds(anySet(), eq(Set.of(10L, 20L)), any(), any(), any());
     }
 
     @Test
@@ -455,13 +454,13 @@ class OpdsBookServiceTest {
         Book book = Book.builder().id(1L).build();
         when(bookMapper.toBook(bookEntity)).thenReturn(book);
 
-        when(bookOpdsRepository.findBookIdsByMetadataSearchAndShelfIds(eq("test"), anySet(), eq(Set.of(10L)), any())).thenReturn(new PageImpl<>(List.of(1L)));
+        when(bookOpdsRepository.findBookIdsByMetadataSearchAndShelfIds(eq("test"), anySet(), eq(Set.of(10L)), any(), any(), any())).thenReturn(new PageImpl<>(List.of(1L)));
         when(bookOpdsRepository.findAllWithFullMetadataByIdsAndShelfIds(eq(List.of(1L)), anySet(), eq(Set.of(10L)))).thenReturn(List.of(bookEntity));
 
         Page<Book> result = opdsBookService.getBooksPage(1L, "test", null, Set.of(10L), 0, 10);
 
         assertThat(result.getContent()).hasSize(1);
-        verify(bookOpdsRepository).findBookIdsByMetadataSearchAndShelfIds(eq("test"), anySet(), eq(Set.of(10L)), any());
+        verify(bookOpdsRepository).findBookIdsByMetadataSearchAndShelfIds(eq("test"), anySet(), eq(Set.of(10L)), any(), any(), any());
     }
 
     @Test
@@ -519,12 +518,12 @@ class OpdsBookServiceTest {
         when(shelf.getUser()).thenReturn(shelfUser);
         when(shelfRepository.findByIdWithUser(10L)).thenReturn(Optional.of(shelf));
 
-        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), eq(Set.of(10L)), any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIdsByShelfIds(anySet(), eq(Set.of(10L)), any(), any(), any())).thenReturn(Page.empty());
 
         Page<Book> result = opdsBookService.getBooksPage(1L, null, null, Set.of(10L), 0, 10);
 
         assertThat(result).isNotNull();
-        verify(bookOpdsRepository).findBookIdsByShelfIds(anySet(), eq(Set.of(10L)), any());
+        verify(bookOpdsRepository).findBookIdsByShelfIds(anySet(), eq(Set.of(10L)), any(), any(), any());
     }
 
     // ==================== validateBookContentAccess ====================
@@ -644,27 +643,24 @@ class OpdsBookServiceTest {
         when(user.getId()).thenReturn(1L);
         when(user.getAssignedLibraries()).thenReturn(List.of(Library.builder().id(1L).watch(false).build()));
 
+        // Restriction is now enforced in the id-query's WHERE clause, so the repository only ever
+        // hands back the id the user is allowed to see.
         BookEntity allowedEntity = mock(BookEntity.class);
-        BookEntity restrictedEntity = mock(BookEntity.class);
         when(allowedEntity.getId()).thenReturn(1L);
-        when(restrictedEntity.getId()).thenReturn(2L);
 
         Book allowedBook = Book.builder().id(1L).build();
         when(bookMapper.toBook(allowedEntity)).thenReturn(allowedBook);
 
-        when(bookOpdsRepository.findBookIdsByLibraryIds(anySet(), any()))
-                .thenReturn(new PageImpl<>(List.of(1L, 2L)));
+        when(bookOpdsRepository.findBookIdsByLibraryIds(anySet(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of(1L)));
         when(bookOpdsRepository.findAllWithMetadataByIdsAndLibraryIds(anyList(), anySet()))
-                .thenReturn(List.of(allowedEntity, restrictedEntity));
-
-        when(contentRestrictionService.applyRestrictions(anyList(), eq(1L)))
                 .thenReturn(List.of(allowedEntity));
 
         Page<Book> result = opdsBookService.getBooksPage(1L, null, null, null, 0, 10);
 
         assertThat(result.getContent()).hasSize(1);
         assertThat(result.getContent().getFirst().getId()).isEqualTo(1L);
-        verify(contentRestrictionService).applyRestrictions(anyList(), eq(1L));
+        verify(restrictionRepository).findByUserId(1L);
     }
 
     @Test
@@ -683,11 +679,11 @@ class OpdsBookServiceTest {
         when(perms.isAdmin()).thenReturn(true);
         when(user.getId()).thenReturn(1L);
 
-        when(bookOpdsRepository.findBookIds(any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findBookIds(any(), any(), any())).thenReturn(Page.empty());
 
         opdsBookService.getBooksPage(1L, null, null, null, 0, 10);
 
-        verify(contentRestrictionService, never()).applyRestrictions(anyList(), eq(1L));
+        verify(restrictionRepository, never()).findByUserId(anyLong());
     }
 
     @Test
@@ -706,14 +702,14 @@ class OpdsBookServiceTest {
         Book book = Book.builder().id(1L).build();
         when(bookMapper.toBook(bookEntity)).thenReturn(book);
 
-        when(bookOpdsRepository.findRecentBookIdsByLibraryIds(anySet(), any()))
+        when(bookOpdsRepository.findRecentBookIdsByLibraryIds(anySet(), any(), any(), any()))
                 .thenReturn(new PageImpl<>(List.of(1L)));
         when(bookOpdsRepository.findAllWithMetadataByIdsAndLibraryIds(anyList(), anySet()))
                 .thenReturn(List.of(bookEntity));
 
         opdsBookService.getRecentBooksPage(2L, 0, 10);
 
-        verify(contentRestrictionService).applyRestrictions(anyList(), eq(2L));
+        verify(restrictionRepository).findByUserId(2L);
     }
 
     @Test
@@ -726,11 +722,11 @@ class OpdsBookServiceTest {
         when(user.getPermissions()).thenReturn(perms);
         when(perms.isAdmin()).thenReturn(true);
 
-        when(bookOpdsRepository.findRecentBookIds(any())).thenReturn(Page.empty());
+        when(bookOpdsRepository.findRecentBookIds(any(), any(), any())).thenReturn(Page.empty());
 
         opdsBookService.getRecentBooksPage(1L, 0, 10);
 
-        verify(contentRestrictionService, never()).applyRestrictions(anyList(), eq(1L));
+        verify(restrictionRepository, never()).findByUserId(anyLong());
     }
 
     @Test
@@ -775,28 +771,26 @@ class OpdsBookServiceTest {
         when(user.getId()).thenReturn(3L);
         when(user.getAssignedLibraries()).thenReturn(List.of(Library.builder().id(1L).watch(false).build()));
 
+        // book2 is excluded at the SQL level (restriction is baked into the id-query's WHERE
+        // clause), so the repository never hands it back in the first place.
         BookEntity book1 = mock(BookEntity.class);
-        BookEntity book2 = mock(BookEntity.class);
         BookEntity book3 = mock(BookEntity.class);
         when(book1.getId()).thenReturn(1L);
-        when(book2.getId()).thenReturn(2L);
         when(book3.getId()).thenReturn(3L);
 
         when(bookMapper.toBook(book1)).thenReturn(Book.builder().id(1L).build());
         when(bookMapper.toBook(book3)).thenReturn(Book.builder().id(3L).build());
 
-        when(bookOpdsRepository.findBookIdsByLibraryIds(anySet(), any()))
-                .thenReturn(new PageImpl<>(List.of(1L, 2L, 3L)));
+        when(bookOpdsRepository.findBookIdsByLibraryIds(anySet(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of(1L, 3L)));
         when(bookOpdsRepository.findAllWithMetadataByIdsAndLibraryIds(anyList(), anySet()))
-                .thenReturn(List.of(book1, book2, book3));
-
-        when(contentRestrictionService.applyRestrictions(anyList(), eq(3L)))
                 .thenReturn(List.of(book1, book3));
 
         Page<Book> result = opdsBookService.getBooksPage(3L, null, null, null, 0, 10);
 
         assertThat(result.getContent()).hasSize(2);
         assertThat(result.getContent()).extracting(Book::getId).containsExactly(1L, 3L);
+        verify(restrictionRepository).findByUserId(3L);
     }
 
 }
