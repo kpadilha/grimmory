@@ -35,6 +35,24 @@ class BookSearchSpecificationTest {
     }
 
     @Test
+    void keepsOnlyTheFirstSixteenTerms() {
+        String query = java.util.stream.IntStream.range(0, 40).mapToObj(i -> "w" + (100 + i))
+                .collect(java.util.stream.Collectors.joining(" "));
+        assertThat(BookSearchSpecification.fulltextTerms(query))
+                .hasSize(BookSearchSpecification.MAX_TERMS)
+                .startsWith("+w100*")
+                .endsWith("+w115*");
+    }
+
+    @Test
+    void readsOnlyTheFirst256Characters() {
+        // 63 x "zzz " fills 252 characters, so the cut at 256 leaves "abcd" and drops "ghi".
+        String query = "zzz ".repeat(63) + "abcdef ghi";
+        assertThat(query.length()).isGreaterThan(BookSearchSpecification.MAX_QUERY_LENGTH);
+        assertThat(BookSearchSpecification.fulltextTerms(query)).containsExactly("+zzz*", "+abcd*");
+    }
+
+    @Test
     void punctuationOnlyQueryHasNoTerms() {
         assertThat(BookSearchSpecification.fulltextTerms("--- !!")).isEmpty();
     }
