@@ -1,5 +1,5 @@
--- Search is substring matching on search_text again; the FULLTEXT indexes and the exact-match
--- identifier indexes only served the prefix search that replaced it.
+-- Every statement is idempotent: MariaDB auto-commits DDL, so a rerun after an interruption must
+-- succeed from any point. The old column is dropped only in V149.4, after this one is recorded.
 DROP INDEX IF EXISTS ft_book_metadata_title_series ON book_metadata;
 DROP INDEX IF EXISTS ft_author_name ON author;
 DROP INDEX IF EXISTS ft_category_name ON category;
@@ -9,7 +9,7 @@ DROP INDEX IF EXISTS idx_book_metadata_isbn_10 ON book_metadata;
 DROP INDEX IF EXISTS idx_book_metadata_asin ON book_metadata;
 
 -- book_metadata rows carry descriptions and embeddings and outgrow the buffer pool; a narrow table
--- keeps the per-row search probe in memory. search_phonetic is filled by the application.
+-- keeps the per-row search probe in memory.
 CREATE TABLE IF NOT EXISTS book_metadata_search (
     book_id         BIGINT NOT NULL PRIMARY KEY,
     search_text     TEXT,
@@ -19,5 +19,3 @@ CREATE TABLE IF NOT EXISTS book_metadata_search (
 
 INSERT IGNORE INTO book_metadata_search (book_id, search_text)
 SELECT book_id, search_text FROM book_metadata;
-
-ALTER TABLE book_metadata DROP COLUMN IF EXISTS search_text;
