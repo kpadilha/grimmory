@@ -405,6 +405,30 @@ class BookBrowseRegistryTest {
         assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText()).isEqualTo("title glynn stewart");
     }
 
+    @Test
+    void flywayBackfillWritesWhatTheEntityWriterWrites() throws Exception {
+        BookEntity book = book("Space Carrier Avalon", "Avalon", null, Instant.now(), List.of("Space Opera"), List.of("Glynn Stewart"), "9781988035009");
+        book.getMetadata().getTags().add(tag("as Glynnis Kincaid"));
+        em.flush();
+        BookMetadataEntity written = em.find(BookMetadataEntity.class, book.getId());
+        String expectedText = written.getSearchText();
+        String expectedPhonetic = written.getSearchPhonetic();
+        em.createNativeQuery("UPDATE book_metadata_search SET search_text = 'stale', search_phonetic = NULL").executeUpdate();
+        em.createNativeQuery("DELETE FROM book_metadata_search WHERE book_id <> " + book.getId()).executeUpdate();
+
+        em.unwrap(org.hibernate.Session.class).doWork(connection -> {
+            org.flywaydb.core.api.migration.Context context = org.mockito.Mockito.mock(org.flywaydb.core.api.migration.Context.class);
+            org.mockito.Mockito.when(context.getConnection()).thenReturn(connection);
+            new db.migration.V149_5__Refresh_search_text().migrate(context);
+        });
+        em.clear();
+
+        BookMetadataEntity refreshed = em.find(BookMetadataEntity.class, book.getId());
+        assertThat(expectedText).isEqualTo("space carrier avalon avalon glynn stewart space opera as glynnis kincaid 9781988035009");
+        assertThat(refreshed.getSearchText()).isEqualTo(expectedText);
+        assertThat(refreshed.getSearchPhonetic()).isEqualTo(expectedPhonetic);
+    }
+
     private TagEntity tag(String name) {
         TagEntity tag = TagEntity.builder().name(name).build();
         em.persist(tag);

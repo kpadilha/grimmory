@@ -15,8 +15,6 @@ public class AppMigrationStartup {
     private final PopulateMetadataScoresMigration populateMetadataScoresMigration;
     private final PopulateFileHashesMigration populateFileHashesMigration;
     private final PopulateCoversAndResizeThumbnailsMigration populateCoversAndResizeThumbnailsMigration;
-    private final PopulateSearchTextMigration populateSearchTextMigration;
-    private final RefreshSearchTextMigration refreshSearchTextMigration;
     private final GenerateCoverHashMigration generateCoverHashMigration;
     private final MigrateProgressToFileProgressMigration migrateProgressToFileProgressMigration;
     private final PopulateAuthorSortNameMigration populateAuthorSortNameMigration;
@@ -29,12 +27,10 @@ public class AppMigrationStartup {
         appMigrationService.executeMigration(populateMetadataScoresMigration);
         appMigrationService.executeMigration(populateFileHashesMigration);
         appMigrationService.executeMigration(populateCoversAndResizeThumbnailsMigration);
-        appMigrationService.executeMigration(populateSearchTextMigration);
         appMigrationService.executeMigration(generateCoverHashMigration);
         appMigrationService.executeMigration(migrateProgressToFileProgressMigration);
         appMigrationService.executeMigration(populateAuthorSortNameMigration);
         appMigrationService.executeMigration(removeBundledCustomSvgIconsMigration);
         appMigrationService.executeMigration(oidcClientSecretSeparateKey);
-        appMigrationService.executeMigration(refreshSearchTextMigration);
     }
 }

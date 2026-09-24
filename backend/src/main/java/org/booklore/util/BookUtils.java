@@ -8,7 +8,9 @@ import org.booklore.model.entity.TagEntity;
 import org.apache.commons.codec.language.Soundex;
 import lombok.experimental.UtilityClass;
 
+import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
@@ -39,33 +41,40 @@ public class BookUtils {
      */
     public static String buildSearchText(BookMetadataEntity e) {
         if (e == null) return null;
+        return buildSearchText(e.getTitle(), e.getSubtitle(), e.getSeriesName(), authorNames(e),
+                e.getCategories() == null ? List.of() : e.getCategories().stream().map(CategoryEntity::getName).toList(),
+                e.getTags() == null ? List.of() : e.getTags().stream().map(TagEntity::getName).toList(),
+                e.getIsbn13(), e.getIsbn10(), e.getAsin());
+    }
 
+    /** {@link #buildSearchText(BookMetadataEntity)} from plain values, for writers without entities. */
+    public static String buildSearchText(String title, String subtitle, String seriesName, List<String> authorNames,
+                                         Collection<String> categoryNames, Collection<String> tagNames,
+                                         String isbn13, String isbn10, String asin) {
         StringBuilder sb = new StringBuilder(256);
-        appendWord(sb, e.getTitle());
-        appendWord(sb, e.getSubtitle());
-        appendWord(sb, e.getSeriesName());
-        if (e.getAuthors() != null) {
-            e.getAuthors().forEach(author -> appendWord(sb, author.getName()));
-        }
-        if (e.getCategories() != null) {
-            e.getCategories().stream().map(CategoryEntity::getName).filter(Objects::nonNull).sorted().forEach(name -> appendWord(sb, name));
-        }
-        if (e.getTags() != null) {
-            e.getTags().stream().map(TagEntity::getName).filter(Objects::nonNull).sorted().forEach(name -> appendWord(sb, name));
-        }
-        appendWord(sb, e.getIsbn13());
-        appendWord(sb, e.getIsbn10());
-        appendWord(sb, e.getAsin());
+        appendWord(sb, title);
+        appendWord(sb, subtitle);
+        appendWord(sb, seriesName);
+        authorNames.forEach(name -> appendWord(sb, name));
+        categoryNames.stream().filter(Objects::nonNull).sorted().forEach(name -> appendWord(sb, name));
+        tagNames.stream().filter(Objects::nonNull).sorted().forEach(name -> appendWord(sb, name));
+        appendWord(sb, isbn13);
+        appendWord(sb, isbn10);
+        appendWord(sb, asin);
 
         return normalizeForSearch(sb.toString().trim());
     }
 
     /** Space-delimited Soundex codes of every author-name word, e.g. " G450 S363 ", for phonetic search. */
     public static String buildSearchPhonetic(BookMetadataEntity e) {
-        if (e == null || e.getAuthors() == null) return null;
+        return e == null ? null : buildSearchPhonetic(authorNames(e));
+    }
+
+    /** {@link #buildSearchPhonetic(BookMetadataEntity)} from author names in book order. */
+    public static String buildSearchPhonetic(List<String> authorNames) {
         Set<String> codes = new LinkedHashSet<>();
-        for (AuthorEntity author : e.getAuthors()) {
-            String name = normalizeForSearch(author.getName());
+        for (String authorName : authorNames) {
+            String name = normalizeForSearch(authorName);
             if (name == null) continue;
             for (String word : WHITESPACE_PATTERN.split(name)) {
                 String code = soundex(word);
@@ -73,6 +82,10 @@ public class BookUtils {
             }
         }
         return codes.isEmpty() ? null : " " + String.join(" ", codes) + " ";
+    }
+
+    private static List<String> authorNames(BookMetadataEntity e) {
+        return e.getAuthors() == null ? List.of() : e.getAuthors().stream().map(AuthorEntity::getName).toList();
     }
 
     /** American Soundex of a normalised word's ASCII letters, or null when it has none. */
