@@ -35,27 +35,29 @@ public final class BookSearchSpecification {
 
     /** Every word is a substring of the search text. */
     static Specification<BookEntity> exact(List<String> words) {
-        return (root, query, cb) -> {
-            HibernateCriteriaBuilder hcb = (HibernateCriteriaBuilder) cb;
-            Expression<String> text = innerMetadataJoin(root).get("searchText");
-            return cb.and(words.stream().map(word -> contains(hcb, text, word)).toArray(Predicate[]::new));
-        };
+        return (root, query, cb) -> exactPredicate((HibernateCriteriaBuilder) cb, innerMetadataJoin(root).get("searchText"), words);
     }
 
     /** Every word is a substring of the search text or shares a Soundex code with an author-name word. */
     static Specification<BookEntity> tolerant(List<String> words) {
         return (root, query, cb) -> {
-            HibernateCriteriaBuilder hcb = (HibernateCriteriaBuilder) cb;
             Join<?, ?> metadata = innerMetadataJoin(root);
-            List<Predicate> predicates = new ArrayList<>(words.size());
-            for (String word : words) {
-                Predicate inText = contains(hcb, metadata.get("searchText"), word);
-                String code = BookUtils.soundex(word);
-                predicates.add(code == null ? inText
-                        : cb.or(inText, cb.like(metadata.get("searchPhonetic"), hcb.value("% " + code + " %"), ESCAPE)));
-            }
-            return cb.and(predicates.toArray(Predicate[]::new));
+            return tolerantPredicate((HibernateCriteriaBuilder) cb, metadata.get("searchText"), metadata.get("searchPhonetic"), words);
         };
+    }
+
+    static Predicate exactPredicate(HibernateCriteriaBuilder cb, Expression<String> text, List<String> words) {
+        return cb.and(words.stream().map(word -> contains(cb, text, word)).toArray(Predicate[]::new));
+    }
+
+    static Predicate tolerantPredicate(HibernateCriteriaBuilder cb, Expression<String> text, Expression<String> phonetic, List<String> words) {
+        List<Predicate> predicates = new ArrayList<>(words.size());
+        for (String word : words) {
+            Predicate inText = contains(cb, text, word);
+            String code = BookUtils.soundex(word);
+            predicates.add(code == null ? inText : cb.or(inText, cb.like(phonetic, cb.value("% " + code + " %"), ESCAPE)));
+        }
+        return cb.and(predicates.toArray(Predicate[]::new));
     }
 
     static boolean hasPhoneticCode(List<String> words) {

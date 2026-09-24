@@ -479,6 +479,53 @@ class BookBrowseRegistryTest {
         assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText()).isEqualTo("title glynn stewart space opera as glynnis kincaid");
     }
 
+    // ---- selectivity ----
+
+    @Test
+    void matchesUpToTheLimitDriveTheQueryFromTheirIds() {
+        int n = BookSearchResolver.SELECTIVE_MATCH_LIMIT;
+        seedMatchingBooks(n);
+        Specification<BookEntity> search = searchResolver.resolve("zqxmatch", (root, q, cb) -> cb.conjunction());
+        assertThat(bookRepository.count(search)).isEqualTo(n);
+
+        // An id-driven search keeps the ids measured before the text changed.
+        em.createNativeQuery("UPDATE book_metadata_search SET search_text = 'gone' WHERE book_id = 1000001").executeUpdate();
+        assertThat(bookRepository.count(search)).isEqualTo(n);
+    }
+
+    @Test
+    void matchesOverTheLimitKeepTheLikePlan() {
+        int n = BookSearchResolver.SELECTIVE_MATCH_LIMIT + 1;
+        seedMatchingBooks(n);
+        Specification<BookEntity> search = searchResolver.resolve("zqxmatch", (root, q, cb) -> cb.conjunction());
+        assertThat(bookRepository.count(search)).isEqualTo(n);
+
+        // A LIKE-driven search re-reads the text.
+        em.createNativeQuery("UPDATE book_metadata_search SET search_text = 'gone' WHERE book_id = 1000001").executeUpdate();
+        assertThat(bookRepository.count(search)).isEqualTo(n - 1);
+    }
+
+    @Test
+    void selectiveFallbackStillDecidesOnTheScope() {
+        BookEntity stewart = book("Space Carrier Avalon", null, null, Instant.now(), List.of(), List.of("Glynn Stewart"), null);
+        BookEntity hidden = book("Glynn Stuart Hidden", null, null, Instant.now(), List.of(), List.of(), null);
+        em.flush();
+        Specification<BookEntity> scope = (root, q, cb) -> cb.notEqual(root.get("id"), hidden.getId());
+
+        assertThat(bookRepository.findAll(searchResolver.resolve("Glynn Stuart", scope).and(scope)))
+                .extracting(BookEntity::getId).containsExactly(stewart.getId());
+        assertThat(bookRepository.findAll(searchResolver.resolve("Glynn Stuart", (root, q, cb) -> cb.conjunction())))
+                .extracting(BookEntity::getId).containsExactly(hidden.getId());
+    }
+
+    private void seedMatchingBooks(int n) {
+        em.flush();
+        String range = " FROM SYSTEM_RANGE(1000001, " + (1000000 + n) + ")";
+        em.createNativeQuery("INSERT INTO book (id, library_id, deleted, is_physical) SELECT X, " + library.getId() + ", FALSE, FALSE" + range).executeUpdate();
+        em.createNativeQuery("INSERT INTO book_metadata (book_id, title) SELECT X, 'Zqxmatch'" + range).executeUpdate();
+        em.createNativeQuery("INSERT INTO book_metadata_search (book_id, search_text) SELECT X, 'zqxmatch'" + range).executeUpdate();
+    }
+
     private TagEntity tag(String name) {
         TagEntity tag = TagEntity.builder().name(name).build();
         em.persist(tag);
