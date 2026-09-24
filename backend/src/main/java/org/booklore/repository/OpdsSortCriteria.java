@@ -18,16 +18,19 @@ import java.util.List;
 /**
  * Builds JPA Criteria {@link Order} lists for every {@link OpdsSortOrder}, replacing the
  * {@code JpaSort.unsafe} JPQL-text sorts that only worked against the id-queries' own aliases.
- * Every order ends with {@code b.id ASC} as a stable tiebreaker.
+ * Every order ends with a stable id tiebreaker ({@code b.id ASC}, or metadata's book id for title sorts).
  */
 final class OpdsSortCriteria {
 
     private OpdsSortCriteria() {
     }
 
-    /** Left-joins metadata (and, for author sorts, the first author) onto the given root. */
+    /**
+     * Inner-joins metadata (and, for author sorts, left-joins the first author) onto the given root.
+     * Every book gets its metadata row in the same save; the inner join lets title sorts drive from the index.
+     */
     static Join<BookEntity, BookMetadataEntity> joinMetadata(Root<BookEntity> root) {
-        return root.join("metadata", JoinType.LEFT);
+        return root.join("metadata", JoinType.INNER);
     }
 
     static ListJoin<BookMetadataEntity, AuthorEntity> joinFirstAuthor(CriteriaBuilder cb, Join<BookEntity, BookMetadataEntity> metadata) {
@@ -47,8 +50,13 @@ final class OpdsSortCriteria {
         List<Order> orders = new ArrayList<>();
         switch (sortOrder == null ? OpdsSortOrder.RECENT : sortOrder) {
             case RECENT -> orders.add(cb.desc(root.get("addedOn")));
-            case TITLE_ASC -> orders.add(cb.asc(cb.coalesce(m.get("title"), "")));
-            case TITLE_DESC -> orders.add(cb.desc(cb.coalesce(m.get("title"), "")));
+            // Tiebreak on metadata's book_id in the same direction so (title_sort, book_id) serves it.
+            case TITLE_ASC -> {
+                return List.of(cb.asc(m.get("titleSort")), cb.asc(m.get("bookId")));
+            }
+            case TITLE_DESC -> {
+                return List.of(cb.desc(m.get("titleSort")), cb.desc(m.get("bookId")));
+            }
             case AUTHOR_ASC -> orders.add(cb.asc(cb.coalesce(sa.get("sortName"), "")));
             case AUTHOR_DESC -> orders.add(cb.desc(cb.coalesce(sa.get("sortName"), "")));
             case SERIES_ASC -> orders.addAll(seriesOrders(cb, m, true));

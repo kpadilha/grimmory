@@ -328,7 +328,6 @@ class BookOpdsRepositoryDataJpaTest {
         Instant base = Instant.now().minus(30, ChronoUnit.DAYS);
         seedForSort(library, libraryPath, "Zebra Book", "Zed Author", "Alpha Series", 3.0f, base, 4.0, 0.0, 0.0);
         seedForSort(library, libraryPath, "alpha book", "amy author", "Alpha Series", 1.0f, base.plusSeconds(10), 0.0, 0.0, 0.0);
-        seedForSort(library, libraryPath, null, null, null, null, base.plusSeconds(20), 0.0, 0.0, 0.0);
         seedForSort(library, libraryPath, "Middle Book", "Middle Author", "Beta Series", null, base.plusSeconds(30), 5.0, 3.0, 0.0);
         seedForSort(library, libraryPath, "Another Middle", "Another Author", null, null, base.plusSeconds(40), 0.0, 2.0, 0.0);
         seedForSort(library, libraryPath, "Tied Title", "Tied Author", "Alpha Series", 1.0f, base.plusSeconds(50), 0.0, 0.0, 0.0);
@@ -344,16 +343,13 @@ class BookOpdsRepositoryDataJpaTest {
         }
     }
 
-    // title is NOT NULL on book_metadata; the "no title" case a LEFT JOIN can produce is a book
-    // with no metadata row at all, so title == null here skips creating one entirely.
+    // No metadata-less book: every book is created with its metadata row, and the sorts now
+    // inner-join metadata so title sorts can be served by the (title_sort, book_id) index.
     private void seedForSort(LibraryEntity library, LibraryPathEntity libraryPath, String title, String authorName,
                               String seriesName, Float seriesNumber, Instant addedOn,
                               double amazonRating, double goodreadsRating, double hardcoverRating) {
         BookEntity book = BookEntity.builder().library(library).libraryPath(libraryPath).addedOn(addedOn).deleted(false).build();
         entityManager.persist(book);
-        if (title == null) {
-            return;
-        }
 
         List<AuthorEntity> authors = new ArrayList<>();
         if (authorName != null) {
