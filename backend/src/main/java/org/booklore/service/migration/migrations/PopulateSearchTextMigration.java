@@ -4,7 +4,7 @@ import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.migration.Migration;
-import org.booklore.util.BookUtils;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
@@ -18,6 +18,7 @@ import java.util.List;
 public class PopulateSearchTextMigration implements Migration {
 
     private final BookRepository bookRepository;
+    private final EntityManager entityManager;
 
     @Override
     public String getKey() {
@@ -48,7 +49,7 @@ public class PopulateSearchTextMigration implements Migration {
                 BookMetadataEntity m = book.getMetadata();
                 if (m != null) {
                     try {
-                        m.setSearchText(BookUtils.buildSearchText(m));
+                        m.updateSearchText();
                     } catch (Exception ex) {
                         log.warn("Failed to build search text for book {}: {}", book.getId(), ex.getMessage());
                     }
@@ -56,6 +57,10 @@ public class PopulateSearchTextMigration implements Migration {
             }
 
             bookRepository.saveAll(books);
+            // One transaction spans every batch: without clearing, each batch query's auto-flush
+            // dirty-checks all books loaded so far and the run grows quadratically.
+            entityManager.flush();
+            entityManager.clear();
             processedCount += books.size();
             lastId = bookBatch.getLast().getId();
 

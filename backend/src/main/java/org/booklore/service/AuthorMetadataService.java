@@ -401,8 +401,10 @@ public class AuthorMetadataService {
         AuthorEntity author = authorRepository.findById(authorId)
                 .orElseThrow(() -> ApiError.AUTHOR_NOT_FOUND.createException(authorId));
 
-        if (request.getName() != null) {
+        if (request.getName() != null && !request.getName().equals(author.getName())) {
             author.setName(request.getName());
+            // The name is denormalised into each book's search text; no book row changes otherwise.
+            author.getBookMetadataEntityList().forEach(BookMetadataEntity::updateSearchText);
         }
         if (request.getDescription() != null) {
             author.setDescription(request.getDescription().isBlank() ? null : request.getDescription());

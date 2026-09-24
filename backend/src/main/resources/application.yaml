@@ -112,6 +112,8 @@ spring:
     show-sql: false
     properties:
       hibernate:
+        session_factory:
+          interceptor: org.booklore.config.SearchTextFlushInterceptor
         query:
           timeout: 30              # 30s max for any HQL/JPQL query
           plan_cache_max_size: 128 # Reduce from 2048 default; small self-hosted app

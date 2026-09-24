@@ -34,16 +34,12 @@ public class BookUtils {
         if (e.getSubtitle() != null) sb.append(e.getSubtitle()).append(" ");
         if (e.getSeriesName() != null) sb.append(e.getSeriesName()).append(" ");
         
-        try {
-            if (e.getAuthors() != null) {
-                for (AuthorEntity author : e.getAuthors()) {
-                    if (author != null && author.getName() != null) {
-                        sb.append(author.getName()).append(" ");
-                    }
+        if (e.getAuthors() != null) {
+            for (AuthorEntity author : e.getAuthors()) {
+                if (author != null && author.getName() != null) {
+                    sb.append(author.getName()).append(" ");
                 }
             }
-        } catch (Exception ex) {
-            // LazyInitializationException or similar - authors won't be included in search text
         }
         
         return normalizeForSearch(sb.toString().trim());
