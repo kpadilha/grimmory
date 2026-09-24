@@ -1,5 +1,5 @@
 -- Every statement is idempotent: MariaDB auto-commits DDL, so a rerun after an interruption must
--- succeed from any point. The old column is dropped only in V149.4, after this one is recorded.
+-- succeed from any point. V149.5 fills the new table, so nothing here reads the old column.
 DROP INDEX IF EXISTS ft_book_metadata_title_series ON book_metadata;
 DROP INDEX IF EXISTS ft_author_name ON author;
 DROP INDEX IF EXISTS ft_category_name ON category;
@@ -16,6 +16,3 @@ CREATE TABLE IF NOT EXISTS book_metadata_search (
     search_phonetic TEXT,
     CONSTRAINT fk_book_metadata_search FOREIGN KEY (book_id) REFERENCES book_metadata (book_id) ON DELETE CASCADE
 );
-
-INSERT IGNORE INTO book_metadata_search (book_id, search_text)
-SELECT book_id, search_text FROM book_metadata;
