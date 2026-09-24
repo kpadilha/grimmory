@@ -305,22 +305,6 @@ class BookBrowseRegistryTest {
         assertThat(facetIds("read_status", List.of("READ"), FacetLogic.OR, user.getId())).containsExactlyInAnyOrder(read.getId());
     }
 
-    // ---- query ----
-
-    @Test
-    void queryMatchesTitleAuthorAndIsbn() {
-        Long byTitle = book("The Hobbit", null, null, Instant.now(), List.of(), List.of(), null).getId();
-        Long byAuthor = book("Unrelated", null, null, Instant.now(), List.of(), List.of("J.R.R. Tolkien"), null).getId();
-        Long byIsbn = book("Another", null, null, Instant.now(), List.of(), List.of(), "9780261103344").getId();
-        em.flush();
-
-        assertThat(matchIds("hobbit")).containsExactlyInAnyOrder(byTitle);
-        assertThat(matchIds("tolkien")).containsExactlyInAnyOrder(byAuthor);
-        assertThat(matchIds("9780261103344")).containsExactlyInAnyOrder(byIsbn);
-    }
-
-    private Set<Long> matchIds(String query) {
-        return bookRepository.findAll(BookSearchSpecification.matching(query)).stream()
-                .map(BookEntity::getId).collect(Collectors.toSet());
-    }
+    // Search runs MariaDB FULLTEXT, which H2 cannot execute; BookSearchSpecificationTest covers
+    // the term building and the SQL is exercised against a MariaDB copy of a real library.
 }
