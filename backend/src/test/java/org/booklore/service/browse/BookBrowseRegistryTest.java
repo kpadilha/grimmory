@@ -16,6 +16,8 @@ import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.entity.TagEntity;
 import org.booklore.model.dto.request.AuthorUpdateRequest;
 import org.booklore.service.AuthorMetadataService;
+import org.booklore.service.metadata.MetadataManagementService;
+import org.booklore.model.enums.MergeMetadataType;
 import org.booklore.model.entity.UserBookProgressEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.ReadStatus;
@@ -76,6 +78,8 @@ class BookBrowseRegistryTest {
     private AuthorMetadataService authorMetadataService;
     @Autowired
     private BookSearchResolver searchResolver;
+    @Autowired
+    private MetadataManagementService metadataManagementService;
 
     @PersistenceContext
     private EntityManager em;
@@ -429,6 +433,25 @@ class BookBrowseRegistryTest {
         assertThat(expectedText).isEqualTo("space carrier avalon avalon glynn stewart space opera as glynnis kincaid 9781988035009");
         assertThat(refreshed.getSearchText()).isEqualTo(expectedText);
         assertThat(refreshed.getSearchPhonetic()).isEqualTo(expectedPhonetic);
+    }
+
+    @Test
+    void consolidatingIntoARenamedTargetRefreshesItsBooks() {
+        // Dotless "ı" upper-cases to "I", so the ignore-case lookup finds the existing names, yet
+        // the normalised search text changes: the rename must reach every book carrying them.
+        BookEntity book = book("Title", null, null, Instant.now(), List.of("Kincaid Genre"), List.of("Glynn Kincaid"), null);
+        book.getMetadata().getTags().add(tag("as Glynnis Kincaid"));
+        em.flush();
+        em.clear();
+
+        metadataManagementService.consolidateMetadata(MergeMetadataType.authors, List.of("Glynn Kıncaid"), List.of());
+        metadataManagementService.consolidateMetadata(MergeMetadataType.categories, List.of("Kıncaid Genre"), List.of());
+        metadataManagementService.consolidateMetadata(MergeMetadataType.tags, List.of("as Glynnis Kıncaid"), List.of());
+        em.flush();
+        em.clear();
+
+        assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText())
+                .isEqualTo("title glynn kıncaid kıncaid genre as glynnis kıncaid");
     }
 
     private TagEntity tag(String name) {

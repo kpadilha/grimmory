@@ -69,6 +69,13 @@ public class AuthorEntity {
         }
     }
 
+    /** Renames and refreshes the search text of every book that carries this name. */
+    public void rename(String newName) {
+        if (Objects.equals(name, newName)) return;
+        this.name = newName;
+        bookMetadataEntityList.forEach(BookMetadataEntity::updateSearchText);
+    }
+
     @Override
     public final boolean equals(Object o) {
         if (this == o) return true;
