@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Set;
 
 // Parses the sort param- comma-separated keys, each optionally '-' prefixed for descending
-// Always appends an ascending primary key so pagination is stable
+// Always appends the primary key, in the last key's direction, so pagination is stable
 public final class SortParser {
 
     public static final String TIEBREAKER_KEY = "id";
@@ -37,7 +37,9 @@ public final class SortParser {
             }
         }
 
-        terms.add(new SortTerm(TIEBREAKER_KEY, false));
+        // Same direction as the last key, so a (key, id) index can be walked backwards too.
+        boolean descending = !terms.isEmpty() && terms.getLast().descending();
+        terms.add(new SortTerm(TIEBREAKER_KEY, descending));
         return terms;
     }
 }

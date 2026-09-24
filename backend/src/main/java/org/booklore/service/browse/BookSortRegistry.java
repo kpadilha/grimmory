@@ -32,11 +32,12 @@ public class BookSortRegistry {
     private static SortRegistry<BookEntity> build() {
         SortRegistry<BookEntity> registry = new SortRegistry<>();
 
-        registry.register("id", rootField("id"));
+        registry.register("id", idTiebreaker());
         registry.register("addedOn", rootField("addedOn"));
+        registry.register("title", metadataField("titleSort"));
 
         for (String field : List.of(
-                "title", "seriesName", "seriesNumber", "publisher", "publishedDate",
+                "seriesName", "seriesNumber", "publisher", "publishedDate",
                 "amazonRating", "amazonReviewCount", "goodreadsRating", "goodreadsReviewCount",
                 "hardcoverRating", "hardcoverReviewCount", "ranobedbRating",
                 "lubimyczytacRating",
@@ -61,6 +62,15 @@ public class BookSortRegistry {
 
     private static SortOrderBuilder<BookEntity> rootField(String field) {
         return ctx -> List.of(order(ctx, ctx.root().get(field)));
+    }
+
+    // Once a sort joined metadata, break ties on its book_id (equal to book.id) so the ORDER BY
+    // stays within one table and an index such as (title_sort, book_id) can deliver it.
+    private static SortOrderBuilder<BookEntity> idTiebreaker() {
+        return ctx -> {
+            Join<?, ?> metadata = findSortJoin(ctx.root(), "metadata", JoinType.INNER);
+            return List.of(order(ctx, metadata != null ? metadata.get("bookId") : ctx.root().get("id")));
+        };
     }
 
     private static SortOrderBuilder<BookEntity> metadataField(String field) {
@@ -125,6 +135,20 @@ public class BookSortRegistry {
     }
 
     private static Join<?, ?> getSortJoin(From<?, ?> root, String name) {
+        return getSortJoin(root, name, JoinType.LEFT);
+    }
+
+    private static Join<?, ?> getSortJoin(From<?, ?> root, String name, JoinType joinType) {
+        Join<?, ?> existing = findSortJoin(root, name, joinType);
+        if (existing != null) {
+            return existing;
+        }
+        Join<?, ?> join = root.join(name, joinType);
+        join.alias("sort_" + name);
+        return join;
+    }
+
+    private static Join<?, ?> findSortJoin(From<?, ?> root, String name, JoinType joinType) {
         String alias = "sort_" + name;
         for (var join : root.getJoins()) {
             if (!alias.equals(join.getAlias())) {
@@ -135,21 +159,20 @@ public class BookSortRegistry {
                 continue;
             }
 
-            if (!JoinType.LEFT.equals(join.getJoinType())) {
+            if (!joinType.equals(join.getJoinType())) {
                 continue;
             }
 
             return join;
         }
-
-        Join<?, ?> join = root.join(name, JoinType.LEFT);
-        join.alias(alias);
-        return join;
+        return null;
     }
 
+    // Inner: every book gets its metadata row in the same save, and an inner join lets the
+    // optimiser drive from a book_metadata index instead of scanning book and filesorting.
     private static Join<?, ?> metadataJoin(SortContext<BookEntity> ctx) {
         Root<BookEntity> root = ctx.root();
-        return getSortJoin(root, "metadata");
+        return getSortJoin(root, "metadata", JoinType.INNER);
     }
 
     private static Join<?, ?> progressJoin(SortContext<BookEntity> ctx) {

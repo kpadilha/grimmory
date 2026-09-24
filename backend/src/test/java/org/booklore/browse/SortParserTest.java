@@ -30,26 +30,27 @@ class SortParserTest {
     @Test
     void dashPrefixMarksDescending() {
         assertThat(SortParser.parse("-title", KEYS))
-                .containsExactly(new SortTerm("title", true), new SortTerm("id", false));
+                .containsExactly(new SortTerm("title", true), new SortTerm("id", true));
     }
 
     @Test
     void parsesMultipleTermsInOrder() {
         assertThat(SortParser.parse("seriesName,-seriesNumber", KEYS))
-                .containsExactly(new SortTerm("seriesName", false), new SortTerm("seriesNumber", true), new SortTerm("id", false));
+                .containsExactly(new SortTerm("seriesName", false), new SortTerm("seriesNumber", true), new SortTerm("id", true));
     }
 
     @Test
     void trimsWhitespaceAroundTokens() {
         assertThat(SortParser.parse(" title , -seriesNumber ", KEYS))
-                .containsExactly(new SortTerm("title", false), new SortTerm("seriesNumber", true), new SortTerm("id", false));
+                .containsExactly(new SortTerm("title", false), new SortTerm("seriesNumber", true), new SortTerm("id", true));
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"", "title", "-title", "seriesName,-seriesNumber"})
-    void alwaysEndsWithIdAscendingTiebreaker(String sort) {
+    @ValueSource(strings = {"", "title", "-title", "seriesName,-seriesNumber", "-seriesName,seriesNumber"})
+    void alwaysEndsWithIdTiebreakerInLastKeyDirection(String sort) {
         List<SortTerm> terms = SortParser.parse(sort.isEmpty() ? null : sort, KEYS);
-        assertThat(terms).endsWith(new SortTerm("id", false));
+        boolean descending = !sort.isEmpty() && terms.get(terms.size() - 2).descending();
+        assertThat(terms).endsWith(new SortTerm("id", descending));
     }
 
     @Test

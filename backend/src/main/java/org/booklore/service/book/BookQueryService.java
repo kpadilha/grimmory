@@ -1,5 +1,8 @@
 package org.booklore.service.book;
 
+import jakarta.persistence.criteria.From;
+import jakarta.persistence.criteria.Join;
+import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
 import org.booklore.app.specification.AppBookSpecification;
 import org.booklore.mapper.v2.BookMapperV2;
@@ -62,10 +65,21 @@ public class BookQueryService {
             // I've tried a few ways to just get only what we need - distinct IDs from the repository.
             // With Projections, we ran into issues with the order by not getting applied.  I'm sure
             // there's a better way but right now this works well enough, even though it over-fetches.
-
-            query.distinct(true);
-            return filter.toPredicate(root, query, cb);
+            Predicate predicate = filter.toPredicate(root, query, cb);
+            // Only to-many joins can repeat a book; DISTINCT otherwise forces a temporary table
+            // and defeats index-ordered pagination.
+            query.distinct(hasCollectionJoin(root));
+            return predicate;
         };
+    }
+
+    private static boolean hasCollectionJoin(From<?, ?> from) {
+        for (Join<?, ?> join : from.getJoins()) {
+            if (join.getAttribute().isCollection() || hasCollectionJoin(join)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public Page<Book> findBooksPaged(Specification<BookEntity> spec, Pageable pageable, Long userId) {

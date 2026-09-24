@@ -228,6 +228,22 @@ class BookBrowseRegistryTest {
     }
 
     @Test
+    void idTiebreakerFollowsDescendingSort() {
+        Long first = book("Same").getId();
+        Long second = book("Same").getId();
+        em.flush();
+        assertThat(sortedIds("-title", user.getId())).containsExactly(second, first);
+    }
+
+    @Test
+    void titleSortUsesGeneratedKey() {
+        BookEntity book = book("Generated");
+        em.flush();
+        em.refresh(book.getMetadata());
+        assertThat(book.getMetadata().getTitleSort()).isEqualTo("Generated");
+    }
+
+    @Test
     void addedOnSorts() {
         Long older = book("Old", null, null, Instant.parse("2020-01-01T00:00:00Z"), List.of(), List.of(), null).getId();
         Long newer = book("New", null, null, Instant.parse("2024-01-01T00:00:00Z"), List.of(), List.of(), null).getId();

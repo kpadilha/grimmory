@@ -33,6 +33,11 @@ public class BookMetadataEntity {
     @Column(name = "title", nullable = false)
     private String title;
 
+    // Database-generated, indexed sort key (see V149.1); the definition here only feeds test DDL.
+    @Column(name = "title_sort", insertable = false, updatable = false,
+            columnDefinition = "varchar(255) generated always as (left(title, 255))")
+    private String titleSort;
+
     @Column(name = "subtitle")
     private String subtitle;
 
