@@ -104,32 +104,11 @@ public class AppBookService {
         int pageNum = req.page() != null && req.page() >= 0 ? req.page() : 0;
         int pageSize = req.size() != null && req.size() > 0 ? Math.min(req.size(), MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
 
-        // Handle magic shelf: compose the DB-side specification directly (no IN-list)
-        if (req.magicShelfId() != null) {
-            Sort sort = buildSort(req.sort(), req.dir());
-            Pageable pageable = PageRequest.of(pageNum, pageSize, sort);
-
-            Specification<BookEntity> spec = buildSpecification(
-                    accessibleLibraryIds, userId, req);
-            spec = spec.and(magicShelfBookService.toSpecification(userId, req.magicShelfId()));
-
-            if (Boolean.TRUE.equals(req.unshelved())) {
-                spec = spec.and(AppBookSpecification.unshelved());
-            }
-
-            Page<BookEntity> bookPage = bookRepository.findAll(spec, pageable);
-            return buildPageResponse(bookPage, userId, pageNum, pageSize);
-        }
-
         Sort sort = buildSort(req.sort(), req.dir());
         Pageable pageable = PageRequest.of(pageNum, pageSize, sort);
 
         Specification<BookEntity> spec = buildSpecification(
                 accessibleLibraryIds, userId, req);
-
-        if (Boolean.TRUE.equals(req.unshelved())) {
-            spec = spec.and(AppBookSpecification.unshelved());
-        }
 
         Page<BookEntity> bookPage = bookRepository.findAll(spec, pageable);
         return buildPageResponse(bookPage, userId, pageNum, pageSize);
@@ -141,14 +120,6 @@ public class AppBookService {
         Set<Long> accessibleLibraryIds = getAccessibleLibraryIds(user);
 
         Specification<BookEntity> spec = buildSpecification(accessibleLibraryIds, userId, req);
-
-        if (req.magicShelfId() != null) {
-            spec = spec.and(magicShelfBookService.toSpecification(userId, req.magicShelfId()));
-        }
-
-        if (Boolean.TRUE.equals(req.unshelved())) {
-            spec = spec.and(AppBookSpecification.unshelved());
-        }
 
         CriteriaBuilder cb = entityManager.getCriteriaBuilder();
         CriteriaQuery<Long> cq = cb.createQuery(Long.class);
@@ -1051,6 +1022,15 @@ public class AppBookService {
         String field = getSortField(req.sort());
         if (field.startsWith("userBookProgress.")) {
             specs.add(AppBookSpecification.withProgress(userId, true));
+        }
+
+        // Magic shelf (composed in the DB, no IN-list) and unshelved belong to the scope, so the
+        // search fallback is decided on exactly the books this request can return.
+        if (req.magicShelfId() != null) {
+            specs.add(magicShelfBookService.toSpecification(userId, req.magicShelfId()));
+        }
+        if (Boolean.TRUE.equals(req.unshelved())) {
+            specs.add(AppBookSpecification.unshelved());
         }
 
         Specification<BookEntity> scope = AppBookSpecification.combine(specs.toArray(Specification[]::new));
