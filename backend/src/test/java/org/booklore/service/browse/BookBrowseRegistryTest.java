@@ -13,6 +13,9 @@ import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.CategoryEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.model.entity.TagEntity;
+import org.booklore.model.dto.request.AuthorUpdateRequest;
+import org.booklore.service.AuthorMetadataService;
 import org.booklore.model.entity.UserBookProgressEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.ReadStatus;
@@ -69,6 +72,8 @@ class BookBrowseRegistryTest {
     private BookSortRegistry sortRegistry;
     @Autowired
     private BookFacetRegistry facetRegistry;
+    @Autowired
+    private AuthorMetadataService authorMetadataService;
 
     @PersistenceContext
     private EntityManager em;
@@ -305,6 +310,109 @@ class BookBrowseRegistryTest {
         assertThat(facetIds("read_status", List.of("READ"), FacetLogic.OR, user.getId())).containsExactlyInAnyOrder(read.getId());
     }
 
-    // Search runs MariaDB FULLTEXT, which H2 cannot execute; BookSearchSpecificationTest covers
-    // the term building and the SQL is exercised against a MariaDB copy of a real library.
+    // ---- query ----
+
+    @Test
+    void queryMatchesSubstringsAnywhereInAnyField() {
+        Long title = book("The Black Wall of Jerusalem", null, null, Instant.now(), List.of(), List.of(), null).getId();
+        Long ugly = book("Confessions of an Ugly Stepsister", null, null, Instant.now(), List.of(), List.of(), null).getId();
+        Long byAuthor = book("Unrelated", null, null, Instant.now(), List.of(), List.of("J.R.R. Tolkien"), null).getId();
+        Long byCategory = book("Other", null, null, Instant.now(), List.of("Space Opera"), List.of(), null).getId();
+        Long byIsbn = book("Another", null, null, Instant.now(), List.of(), List.of(), "9780261103344").getId();
+        em.flush();
+
+        assertThat(matchIds("salem")).containsExactlyInAnyOrder(title);
+        assertThat(matchIds("gly")).containsExactlyInAnyOrder(ugly);
+        assertThat(matchIds("TOLKIEN")).containsExactlyInAnyOrder(byAuthor);
+        assertThat(matchIds("opera")).containsExactlyInAnyOrder(byCategory);
+        assertThat(matchIds("261103")).containsExactlyInAnyOrder(byIsbn);
+    }
+
+    @Test
+    void everyWordMustMatchInAnyOrderAcrossFields() {
+        Long wanted = book("Space Carrier Avalon", null, null, Instant.now(), List.of(), List.of("Glynn Stewart"), null).getId();
+        book("Space Carrier", null, null, Instant.now(), List.of(), List.of("Someone Else"), null);
+        em.flush();
+
+        assertThat(matchIds("avalon space")).containsExactlyInAnyOrder(wanted);
+        assertThat(matchIds("stewart carrier")).containsExactlyInAnyOrder(wanted);
+    }
+
+    @Test
+    void misspelledAuthorMatchesPhoneticallyOnlyWhenNothingMatchesExactly() {
+        Long stewart = book("Space Carrier Avalon", null, null, Instant.now(), List.of(), List.of("Glynn Stewart"), null).getId();
+        Long stuart = book("Other Book", null, null, Instant.now(), List.of(), List.of("Stuart Hill"), null).getId();
+        em.flush();
+
+        assertThat(matchIds("Glynn Stuart")).containsExactlyInAnyOrder(stewart);
+        // "stuart" matches a book as a substring, so the phonetic fallback stays off.
+        assertThat(matchIds("stuart")).containsExactlyInAnyOrder(stuart);
+    }
+
+    @Test
+    void backslashInTheQueryIsLiteral() {
+        Long backslash = book("100\\ Proof", null, null, Instant.now(), List.of(), List.of(), null).getId();
+        book("Nothing Here", null, null, Instant.now(), List.of(), List.of(), null);
+        em.flush();
+
+        assertThat(matchIds("0\\ p")).containsExactlyInAnyOrder(backslash);
+    }
+
+    // ---- search text maintenance ----
+
+    @Test
+    void addingAnAuthorToTheCollectionAloneRefreshesSearchText() {
+        BookEntity book = book("Plain Title");
+        em.flush();
+        em.clear();
+
+        BookMetadataEntity metadata = em.find(BookMetadataEntity.class, book.getId());
+        metadata.getAuthors().add(author("Glynn Stewart"));
+        metadata.getTags().add(tag("as Glynnis Kincaid"));
+        em.flush();
+        em.clear();
+
+        BookMetadataEntity reloaded = em.find(BookMetadataEntity.class, book.getId());
+        assertThat(reloaded.getSearchText()).isEqualTo("plain title glynn stewart as glynnis kincaid");
+        assertThat(reloaded.getSearchPhonetic()).isEqualTo(" G450 S363 ");
+    }
+
+    @Test
+    void editingAFieldKeepsUnloadedAuthorsInSearchText() {
+        BookEntity book = book("Old Title", null, null, Instant.now(), List.of(), List.of("Glynn Stewart"), null);
+        em.flush();
+        em.clear();
+
+        em.find(BookMetadataEntity.class, book.getId()).setTitle("New Title");
+        em.flush();
+        em.clear();
+
+        assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText()).isEqualTo("new title glynn stewart");
+    }
+
+    @Test
+    void renamingAnAuthorRefreshesTheirBooks() {
+        BookEntity book = book("Title", null, null, Instant.now(), List.of(), List.of("Glyn Stewrt"), null);
+        em.flush();
+        em.clear();
+
+        AuthorUpdateRequest rename = new AuthorUpdateRequest();
+        rename.setName("Glynn Stewart");
+        authorMetadataService.updateAuthor(authors.get("Glyn Stewrt").getId(), rename);
+        em.flush();
+        em.clear();
+
+        assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText()).isEqualTo("title glynn stewart");
+    }
+
+    private TagEntity tag(String name) {
+        TagEntity tag = TagEntity.builder().name(name).build();
+        em.persist(tag);
+        return tag;
+    }
+
+    private Set<Long> matchIds(String query) {
+        return bookRepository.findAll(BookSearchSpecification.matching(query)).stream()
+                .map(BookEntity::getId).collect(Collectors.toSet());
+    }
 }

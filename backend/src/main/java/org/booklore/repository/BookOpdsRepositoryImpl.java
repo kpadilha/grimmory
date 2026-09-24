@@ -14,6 +14,7 @@ import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.enums.OpdsSortOrder;
+import org.booklore.service.browse.BookSearchSpecification;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -60,7 +61,7 @@ public class BookOpdsRepositoryImpl implements BookOpdsRepositoryCustom {
     @Override
     public Page<Long> findBookIdsByMetadataSearch(String text, Specification<BookEntity> restriction, OpdsSortOrder sortOrder, Pageable pageable) {
         return findIds(AppBookSpecification.notDeleted()
-                .and(BookOpdsSpecifications.metadataSearch(text))
+                .and(BookSearchSpecification.matching(text))
                 .and(restriction), true, sortOrder, pageable);
     }
 
@@ -68,7 +69,7 @@ public class BookOpdsRepositoryImpl implements BookOpdsRepositoryCustom {
     public Page<Long> findBookIdsByMetadataSearchAndLibraryIds(String text, Collection<Long> libraryIds, Specification<BookEntity> restriction, OpdsSortOrder sortOrder, Pageable pageable) {
         return findIds(AppBookSpecification.notDeleted()
                 .and(BookOpdsSpecifications.inLibraries(libraryIds))
-                .and(BookOpdsSpecifications.metadataSearch(text))
+                .and(BookSearchSpecification.matching(text))
                 .and(restriction), true, sortOrder, pageable);
     }
 
@@ -77,7 +78,7 @@ public class BookOpdsRepositoryImpl implements BookOpdsRepositoryCustom {
         return findIds(AppBookSpecification.notDeleted()
                 .and(BookOpdsSpecifications.inLibraries(libraryIds))
                 .and(BookOpdsSpecifications.inShelves(shelfIds))
-                .and(BookOpdsSpecifications.metadataSearch(text))
+                .and(BookSearchSpecification.matching(text))
                 .and(restriction), true, sortOrder, pageable);
     }
 

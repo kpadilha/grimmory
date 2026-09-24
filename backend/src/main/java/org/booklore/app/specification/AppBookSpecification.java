@@ -193,33 +193,6 @@ public class AppBookSpecification {
         };
     }
 
-    public static Specification<BookEntity> searchText(String searchQuery) {
-        return (root, query, cb) -> {
-            if (searchQuery == null || searchQuery.trim().isEmpty()) {
-                return cb.conjunction();
-            }
-            String pattern = "%" + searchQuery.toLowerCase().trim() + "%";
-
-            Join<BookEntity, BookMetadataEntity> metadataJoin = root.join("metadata", JoinType.LEFT);
-
-            // Use EXISTS subquery for author search to avoid DISTINCT and cartesian products
-            Subquery<Long> authorSubquery = query.subquery(Long.class);
-            Root<BookMetadataEntity> metaRoot = authorSubquery.from(BookMetadataEntity.class);
-            Join<BookMetadataEntity, AuthorEntity> authorJoin = metaRoot.join("authors", JoinType.INNER);
-            authorSubquery.select(cb.literal(1L))
-                    .where(
-                            cb.equal(metaRoot.get("id"), root.get("id")),
-                            cb.like(cb.lower(authorJoin.get("name")), pattern)
-                    );
-
-            return cb.or(
-                    cb.like(cb.lower(metadataJoin.get("title")), pattern),
-                    cb.like(cb.lower(metadataJoin.get("seriesName")), pattern),
-                    cb.exists(authorSubquery)
-            );
-        };
-    }
-
     public static Specification<BookEntity> notDeleted() {
         return (root, query, cb) -> cb.or(
                 cb.isNull(root.get("deleted")),

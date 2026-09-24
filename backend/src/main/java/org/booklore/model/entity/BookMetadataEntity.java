@@ -23,8 +23,13 @@ import java.util.Set;
 @AllArgsConstructor
 @DynamicUpdate
 @Table(name = "book_metadata")
+// Search columns live in a narrow table: book_metadata's wide rows outgrow the buffer pool, and a
+// title-ordered page probes search_text row by row.
+@SecondaryTable(name = BookMetadataEntity.SEARCH_TABLE, pkJoinColumns = @PrimaryKeyJoinColumn(name = "book_id"))
 @BatchSize(size = 20)
 public class BookMetadataEntity {
+
+    public static final String SEARCH_TABLE = "book_metadata_search";
 
     @Id
     @Column(name = "book_id")
@@ -342,10 +347,11 @@ public class BookMetadataEntity {
     @Column(name = "embedding_updated_at")
     private Instant embeddingUpdatedAt;
 
-    @Basic(fetch = FetchType.LAZY)
-    @LazyGroup("heavyText")
-    @Column(name = "search_text", columnDefinition = "TEXT")
+    @Column(name = "search_text", table = SEARCH_TABLE, columnDefinition = "TEXT")
     private String searchText;
+
+    @Column(name = "search_phonetic", table = SEARCH_TABLE, columnDefinition = "TEXT")
+    private String searchPhonetic;
 
     @Column(name = "age_rating")
     private Integer ageRating;
@@ -361,11 +367,13 @@ public class BookMetadataEntity {
     @Builder.Default
     private Boolean contentRatingLocked = Boolean.FALSE;
 
+    // Collection-only changes skip @PreUpdate; SearchTextFlushInterceptor covers those.
     @PrePersist
     @PreUpdate
     public void updateSearchText() {
         trimStringFields();
         this.searchText = BookUtils.buildSearchText(this);
+        this.searchPhonetic = BookUtils.buildSearchPhonetic(this);
     }
 
     private void trimStringFields() {

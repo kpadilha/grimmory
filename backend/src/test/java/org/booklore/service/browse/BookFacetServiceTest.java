@@ -536,10 +536,9 @@ class BookFacetServiceTest {
         assertThat(bare.href()).isEqualTo("/api/v1/books/facets");
         assertThat(bare.type()).isEqualTo(Link.JSON_TYPE);
 
-        // A word-free query keeps the MariaDB-only FULLTEXT predicate out of this H2 test.
-        Link filtered = facetService.getFacets(List.of("genre:Horror"), null, "&?").links().getFirst();
+        Link filtered = facetService.getFacets(List.of("genre:Horror"), null, "dune").links().getFirst();
         assertThat(filtered.rel()).containsExactly("self");
-        assertThat(filtered.href()).isEqualTo("/api/v1/books/facets?facet=genre%3AHorror&query=%26%3F");
+        assertThat(filtered.href()).isEqualTo("/api/v1/books/facets?facet=genre%3AHorror&query=dune");
     }
 
     // Serializes through the Spring-managed Jackson 3 mapper, the same one the HTTP

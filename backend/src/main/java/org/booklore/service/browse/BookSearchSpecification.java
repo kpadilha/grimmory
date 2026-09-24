@@ -1,12 +1,16 @@
 package org.booklore.service.browse;
 
 import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.Expression;
+import jakarta.persistence.criteria.From;
+import jakarta.persistence.criteria.Join;
+import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Subquery;
-import org.booklore.config.BookSearchFunctionContributor;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookMetadataEntity;
+import org.booklore.util.BookUtils;
 import org.hibernate.query.criteria.HibernateCriteriaBuilder;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -17,66 +21,85 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Library search: every word must prefix-match a word of the title, series, an author, a category
- * or a tag (MariaDB FULLTEXT), or the whole query must equal the ISBN-13, ISBN-10 or ASIN.
- * Mid-word substrings no longer match, and words shorter than the index's minimum token size are
- * ignored unless the query has nothing longer. The FULLTEXT part is MariaDB-only.
+ * The one library search rule (web, facets, OPDS, app): every query word must occur as a substring
+ * of the book's search text, in any order. When no book at all matches that way, a word may instead
+ * match an author-name word by Soundex, so "Glynn Stuart" still finds "Glynn Stewart".
  */
 public final class BookSearchSpecification {
 
-    // innodb_ft_min_token_size default (and the value measured in production): shorter words are
-    // never indexed, so a required short term would reject every book.
-    static final int MIN_TOKEN_LENGTH = 3;
-
-    // Each term adds a UNION of four FULLTEXT lookups to the page, count and facet queries, so
-    // query size is capped to keep one request's cost bounded.
+    // Each word adds one LIKE per row to the page, count and facet queries; caps bound the cost.
     static final int MAX_QUERY_LENGTH = 256;
     static final int MAX_TERMS = 16;
 
-    // InnoDB splits on anything but letters, digits and '_'; splitting the same way also strips
-    // every boolean-mode operator (+ - < > ( ) ~ * " @) from user input.
-    private static final Pattern NON_WORD = Pattern.compile("[^\\p{L}\\p{M}\\p{N}_]+");
+    private static final char ESCAPE = '\\';
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     private BookSearchSpecification() {
     }
 
     public static Specification<BookEntity> matching(String query) {
         return (root, criteriaQuery, cb) -> {
-            if (query == null || query.isBlank()) {
+            List<String> words = words(query);
+            if (words.isEmpty()) {
                 return cb.conjunction();
             }
-            String trimmed = query.trim();
-            Predicate identifier = identifierMatches(root, criteriaQuery.subquery(Long.class), cb, trimmed);
-            List<String> terms = fulltextTerms(trimmed);
-            if (terms.isEmpty()) {
-                return identifier;
+            HibernateCriteriaBuilder hcb = (HibernateCriteriaBuilder) cb;
+            Join<?, ?> metadata = innerMetadataJoin(root);
+            Predicate exact = allWordsInText(hcb, metadata, words);
+            if (words.stream().allMatch(word -> BookUtils.soundex(word) == null)) {
+                return exact;
             }
-            List<Predicate> words = new ArrayList<>(terms.size());
-            for (String term : terms) {
-                words.add(cb.isTrue(cb.function(BookSearchFunctionContributor.BOOK_SEARCH_TERM, Boolean.class,
-                        root.get("id"), ((HibernateCriteriaBuilder) cb).value(term))));
+
+            Subquery<Long> anyExact = criteriaQuery.subquery(Long.class);
+            Root<BookMetadataEntity> other = anyExact.from(BookMetadataEntity.class);
+            anyExact.select(other.get("bookId")).where(allWordsInText(hcb, other, words));
+
+            List<Predicate> tolerant = new ArrayList<>(words.size());
+            for (String word : words) {
+                String code = BookUtils.soundex(word);
+                Predicate inText = contains(hcb, metadata.get("searchText"), word);
+                tolerant.add(code == null ? inText
+                        : cb.or(inText, cb.like(metadata.get("searchPhonetic"), hcb.value("% " + code + " %"), ESCAPE)));
             }
-            return cb.or(cb.and(words.toArray(Predicate[]::new)), identifier);
+            return cb.or(exact, cb.and(cb.not(cb.exists(anyExact)), cb.and(tolerant.toArray(Predicate[]::new))));
         };
     }
 
-    /**
-     * One required prefix term ({@code +word*}) per distinct word, operator-free by construction.
-     * Only the first {@link #MAX_QUERY_LENGTH} characters are read and the first {@link #MAX_TERMS} terms kept.
-     */
-    static List<String> fulltextTerms(String query) {
-        Set<String> all = new LinkedHashSet<>();
-        Set<String> indexable = new LinkedHashSet<>();
-        for (String word : NON_WORD.split(truncate(query))) {
-            if (word.isEmpty()) {
-                continue;
+    /** Normalised like search_text, split on whitespace, deduplicated; at most 16 words from 256 characters. */
+    static List<String> words(String query) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        String normalized = BookUtils.normalizeForSearch(truncate(query.trim()));
+        Set<String> words = new LinkedHashSet<>();
+        for (String word : WHITESPACE.split(normalized)) {
+            if (!word.isEmpty()) {
+                words.add(word);
             }
-            all.add(word);
-            if (word.codePointCount(0, word.length()) >= MIN_TOKEN_LENGTH) {
-                indexable.add(word);
+            if (words.size() == MAX_TERMS) {
+                break;
             }
         }
-        return (indexable.isEmpty() ? all : indexable).stream().limit(MAX_TERMS).map(word -> "+" + word + "*").toList();
+        return List.copyOf(words);
+    }
+
+    private static Predicate allWordsInText(HibernateCriteriaBuilder cb, From<?, ?> metadata, List<String> words) {
+        return cb.and(words.stream().map(word -> contains(cb, metadata.get("searchText"), word)).toArray(Predicate[]::new));
+    }
+
+    private static Predicate contains(HibernateCriteriaBuilder cb, Expression<String> text, String word) {
+        String escaped = word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        return cb.like(text, cb.value("%" + escaped + "%"), ESCAPE);
+    }
+
+    // Reuses the sort's inner join when present, so the page query reads one book_metadata row.
+    private static Join<?, ?> innerMetadataJoin(Root<BookEntity> root) {
+        for (Join<BookEntity, ?> join : root.getJoins()) {
+            if ("metadata".equals(join.getAttribute().getName()) && join.getJoinType() == JoinType.INNER && join.getOn() == null) {
+                return join;
+            }
+        }
+        return root.join("metadata", JoinType.INNER);
     }
 
     private static String truncate(String query) {
@@ -84,14 +107,5 @@ public final class BookSearchSpecification {
             return query;
         }
         return query.substring(0, query.offsetByCodePoints(0, MAX_QUERY_LENGTH));
-    }
-
-    private static Predicate identifierMatches(Root<BookEntity> root, Subquery<Long> sub, CriteriaBuilder cb, String value) {
-        Root<BookMetadataEntity> m = sub.from(BookMetadataEntity.class);
-        sub.select(m.get("bookId")).where(cb.or(
-                cb.equal(m.get("isbn13"), value),
-                cb.equal(m.get("isbn10"), value),
-                cb.equal(m.get("asin"), value)));
-        return root.get("id").in(sub);
     }
 }

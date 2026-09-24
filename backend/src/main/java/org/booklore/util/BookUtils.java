@@ -3,9 +3,14 @@ package org.booklore.util;
 import org.booklore.model.dto.Shelf;
 import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookMetadataEntity;
+import org.booklore.model.entity.CategoryEntity;
+import org.booklore.model.entity.TagEntity;
+import org.apache.commons.codec.language.Soundex;
 import lombok.experimental.UtilityClass;
 
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.regex.Pattern;
@@ -24,25 +29,60 @@ public class BookUtils {
     private static final Pattern WHITESPACE_PATTERN = Pattern.compile("\\s+");
     private static final Pattern SPECIAL_CHARACTERS_PATTERN = Pattern.compile("[!@$%^&*_=|~`<>?/\"]");
     private static final Pattern DIACRITICAL_MARKS_PATTERN = Pattern.compile("\\p{InCombiningDiacriticalMarks}+");
+    private static final Pattern NON_ASCII_LETTER_PATTERN = Pattern.compile("[^a-z]");
     private static final Pattern PARENTHESIS_PATTERN = Pattern.compile("\\s?\\([^()]*\\)");
 
+    /**
+     * The single searchable text of a book: title, subtitle, series, authors, categories, tags, ISBNs
+     * and ASIN, normalised by {@link #normalizeForSearch}. Categories and tags are sorted so that a
+     * recompute of unchanged data yields the same string.
+     */
     public static String buildSearchText(BookMetadataEntity e) {
         if (e == null) return null;
-        
+
         StringBuilder sb = new StringBuilder(256);
-        if (e.getTitle() != null) sb.append(e.getTitle()).append(" ");
-        if (e.getSubtitle() != null) sb.append(e.getSubtitle()).append(" ");
-        if (e.getSeriesName() != null) sb.append(e.getSeriesName()).append(" ");
-        
+        appendWord(sb, e.getTitle());
+        appendWord(sb, e.getSubtitle());
+        appendWord(sb, e.getSeriesName());
         if (e.getAuthors() != null) {
-            for (AuthorEntity author : e.getAuthors()) {
-                if (author != null && author.getName() != null) {
-                    sb.append(author.getName()).append(" ");
-                }
+            e.getAuthors().forEach(author -> appendWord(sb, author.getName()));
+        }
+        if (e.getCategories() != null) {
+            e.getCategories().stream().map(CategoryEntity::getName).filter(Objects::nonNull).sorted().forEach(name -> appendWord(sb, name));
+        }
+        if (e.getTags() != null) {
+            e.getTags().stream().map(TagEntity::getName).filter(Objects::nonNull).sorted().forEach(name -> appendWord(sb, name));
+        }
+        appendWord(sb, e.getIsbn13());
+        appendWord(sb, e.getIsbn10());
+        appendWord(sb, e.getAsin());
+
+        return normalizeForSearch(sb.toString().trim());
+    }
+
+    /** Space-delimited Soundex codes of every author-name word, e.g. " G450 S363 ", for phonetic search. */
+    public static String buildSearchPhonetic(BookMetadataEntity e) {
+        if (e == null || e.getAuthors() == null) return null;
+        Set<String> codes = new LinkedHashSet<>();
+        for (AuthorEntity author : e.getAuthors()) {
+            String name = normalizeForSearch(author.getName());
+            if (name == null) continue;
+            for (String word : WHITESPACE_PATTERN.split(name)) {
+                String code = soundex(word);
+                if (code != null) codes.add(code);
             }
         }
-        
-        return normalizeForSearch(sb.toString().trim());
+        return codes.isEmpty() ? null : " " + String.join(" ", codes) + " ";
+    }
+
+    /** American Soundex of a normalised word's ASCII letters, or null when it has none. */
+    public static String soundex(String normalizedWord) {
+        String letters = NON_ASCII_LETTER_PATTERN.matcher(normalizedWord).replaceAll("");
+        return letters.isEmpty() ? null : Soundex.US_ENGLISH.encode(letters);
+    }
+
+    private static void appendWord(StringBuilder sb, String value) {
+        if (value != null) sb.append(value).append(' ');
     }
 
     public static String normalizeForSearch(String term) {

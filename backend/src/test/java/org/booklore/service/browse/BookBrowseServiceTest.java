@@ -181,7 +181,13 @@ class BookBrowseServiceTest {
         assertThat(result.page().totalElements()).isEqualTo(1);
     }
 
-    // queryIsApplied moved off H2: search is MariaDB FULLTEXT (see BookSearchSpecification).
+    @Test
+    void queryIsApplied() {
+        Long hobbit = book("The Hobbit", List.of()).getId();
+        book("Dune", List.of());
+        em.flush();
+        assertThat(browse(null, null, "hobbit", null, 0, 20).content().stream().map(Book::getId)).containsExactly(hobbit);
+    }
 
     @Test
     void cursorWalkIsConsistent() {

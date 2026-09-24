@@ -26,6 +26,7 @@ import org.booklore.repository.ShelfRepository;
 import org.booklore.repository.UserBookFileProgressRepository;
 import org.booklore.repository.UserBookProgressRepository;
 import org.booklore.service.book.BookService;
+import org.booklore.service.browse.BookSearchSpecification;
 import org.booklore.service.opds.MagicShelfBookService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -250,7 +251,7 @@ public class AppBookService {
                 AppBookSpecification.notDeleted(),
                 AppBookSpecification.hasDigitalFileOrIsPhysical(),
                 AppBookSpecification.inLibraries(accessibleLibraryIds),
-                AppBookSpecification.searchText(query)
+                BookSearchSpecification.matching(query)
         );
 
         Page<BookEntity> bookPage = bookRepository.findAll(spec, pageable);
@@ -832,7 +833,7 @@ public class AppBookService {
         }
 
         if (req.search() != null && !req.search().trim().isEmpty()) {
-            specs.add(AppBookSpecification.searchText(req.search()));
+            specs.add(BookSearchSpecification.matching(req.search()));
         }
 
         if (req.fileType() != null && !req.fileType().isEmpty()) {
