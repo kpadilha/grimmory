@@ -1,15 +1,11 @@
 package org.booklore.service.browse;
 
-import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.Expression;
-import jakarta.persistence.criteria.From;
 import jakarta.persistence.criteria.Join;
 import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
-import jakarta.persistence.criteria.Subquery;
 import org.booklore.model.entity.BookEntity;
-import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.util.BookUtils;
 import org.hibernate.query.criteria.HibernateCriteriaBuilder;
 import org.springframework.data.jpa.domain.Specification;
@@ -22,8 +18,8 @@ import java.util.regex.Pattern;
 
 /**
  * The one library search rule (web, facets, OPDS, app): every query word must occur as a substring
- * of the book's search text, in any order. When no book at all matches that way, a word may instead
- * match an author-name word by Soundex, so "Glynn Stuart" still finds "Glynn Stewart".
+ * of the book's search text, in any order. {@link BookSearchResolver} decides, within the caller's
+ * visible books, when a word may instead match an author-name word by Soundex ("Glynn Stuart").
  */
 public final class BookSearchSpecification {
 
@@ -37,32 +33,33 @@ public final class BookSearchSpecification {
     private BookSearchSpecification() {
     }
 
-    public static Specification<BookEntity> matching(String query) {
-        return (root, criteriaQuery, cb) -> {
-            List<String> words = words(query);
-            if (words.isEmpty()) {
-                return cb.conjunction();
-            }
+    /** Every word is a substring of the search text. */
+    static Specification<BookEntity> exact(List<String> words) {
+        return (root, query, cb) -> {
+            HibernateCriteriaBuilder hcb = (HibernateCriteriaBuilder) cb;
+            Expression<String> text = innerMetadataJoin(root).get("searchText");
+            return cb.and(words.stream().map(word -> contains(hcb, text, word)).toArray(Predicate[]::new));
+        };
+    }
+
+    /** Every word is a substring of the search text or shares a Soundex code with an author-name word. */
+    static Specification<BookEntity> tolerant(List<String> words) {
+        return (root, query, cb) -> {
             HibernateCriteriaBuilder hcb = (HibernateCriteriaBuilder) cb;
             Join<?, ?> metadata = innerMetadataJoin(root);
-            Predicate exact = allWordsInText(hcb, metadata, words);
-            if (words.stream().allMatch(word -> BookUtils.soundex(word) == null)) {
-                return exact;
-            }
-
-            Subquery<Long> anyExact = criteriaQuery.subquery(Long.class);
-            Root<BookMetadataEntity> other = anyExact.from(BookMetadataEntity.class);
-            anyExact.select(other.get("bookId")).where(allWordsInText(hcb, other, words));
-
-            List<Predicate> tolerant = new ArrayList<>(words.size());
+            List<Predicate> predicates = new ArrayList<>(words.size());
             for (String word : words) {
-                String code = BookUtils.soundex(word);
                 Predicate inText = contains(hcb, metadata.get("searchText"), word);
-                tolerant.add(code == null ? inText
+                String code = BookUtils.soundex(word);
+                predicates.add(code == null ? inText
                         : cb.or(inText, cb.like(metadata.get("searchPhonetic"), hcb.value("% " + code + " %"), ESCAPE)));
             }
-            return cb.or(exact, cb.and(cb.not(cb.exists(anyExact)), cb.and(tolerant.toArray(Predicate[]::new))));
+            return cb.and(predicates.toArray(Predicate[]::new));
         };
+    }
+
+    static boolean hasPhoneticCode(List<String> words) {
+        return words.stream().anyMatch(word -> BookUtils.soundex(word) != null);
     }
 
     /** Normalised like search_text, split on whitespace, deduplicated; at most 16 words from 256 characters. */
@@ -81,10 +78,6 @@ public final class BookSearchSpecification {
             }
         }
         return List.copyOf(words);
-    }
-
-    private static Predicate allWordsInText(HibernateCriteriaBuilder cb, From<?, ?> metadata, List<String> words) {
-        return cb.and(words.stream().map(word -> contains(cb, metadata.get("searchText"), word)).toArray(Predicate[]::new));
     }
 
     private static Predicate contains(HibernateCriteriaBuilder cb, Expression<String> text, String word) {

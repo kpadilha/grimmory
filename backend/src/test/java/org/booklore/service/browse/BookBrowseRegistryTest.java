@@ -74,6 +74,8 @@ class BookBrowseRegistryTest {
     private BookFacetRegistry facetRegistry;
     @Autowired
     private AuthorMetadataService authorMetadataService;
+    @Autowired
+    private BookSearchResolver searchResolver;
 
     @PersistenceContext
     private EntityManager em;
@@ -436,7 +438,7 @@ class BookBrowseRegistryTest {
     }
 
     private Set<Long> matchIds(String query) {
-        return bookRepository.findAll(BookSearchSpecification.matching(query)).stream()
+        return bookRepository.findAll(searchResolver.resolve(query, (root, q, cb) -> cb.conjunction())).stream()
                 .map(BookEntity::getId).collect(Collectors.toSet());
     }
 }

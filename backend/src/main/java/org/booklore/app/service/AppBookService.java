@@ -26,7 +26,7 @@ import org.booklore.repository.ShelfRepository;
 import org.booklore.repository.UserBookFileProgressRepository;
 import org.booklore.repository.UserBookProgressRepository;
 import org.booklore.service.book.BookService;
-import org.booklore.service.browse.BookSearchSpecification;
+import org.booklore.service.browse.BookSearchResolver;
 import org.booklore.service.opds.MagicShelfBookService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -66,6 +66,7 @@ public class AppBookService {
     private final BookService bookService;
     private final MagicShelfBookService magicShelfBookService;
     private final EntityManager entityManager;
+    private final BookSearchResolver searchResolver;
 
     private final Cache<String, AppFilterOptions> filterOptionsCache = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(30))
@@ -80,7 +81,8 @@ public class AppBookService {
                           AppBookMapper mobileBookMapper,
                           BookService bookService,
                           MagicShelfBookService magicShelfBookService,
-                          EntityManager entityManager) {
+                          EntityManager entityManager,
+                          BookSearchResolver searchResolver) {
         this.bookRepository = bookRepository;
         this.userBookProgressRepository = userBookProgressRepository;
         this.userBookFileProgressRepository = userBookFileProgressRepository;
@@ -90,6 +92,7 @@ public class AppBookService {
         this.bookService = bookService;
         this.magicShelfBookService = magicShelfBookService;
         this.entityManager = entityManager;
+        this.searchResolver = searchResolver;
     }
 
     public AppPageResponse<AppBookSummary> getBooks(BookListRequest req) {
@@ -247,12 +250,12 @@ public class AppBookService {
 
         Pageable pageable = PageRequest.of(pageNum, pageSize, Sort.by(Sort.Direction.DESC, "addedOn"));
 
-        Specification<BookEntity> spec = AppBookSpecification.combine(
+        Specification<BookEntity> scope = AppBookSpecification.combine(
                 AppBookSpecification.notDeleted(),
                 AppBookSpecification.hasDigitalFileOrIsPhysical(),
-                AppBookSpecification.inLibraries(accessibleLibraryIds),
-                BookSearchSpecification.matching(query)
+                AppBookSpecification.inLibraries(accessibleLibraryIds)
         );
+        Specification<BookEntity> spec = AppBookSpecification.combine(scope, searchResolver.resolve(query, scope));
 
         Page<BookEntity> bookPage = bookRepository.findAll(spec, pageable);
         return buildPageResponse(bookPage, userId, pageNum, pageSize);
@@ -832,9 +835,6 @@ public class AppBookService {
             }
         }
 
-        if (req.search() != null && !req.search().trim().isEmpty()) {
-            specs.add(BookSearchSpecification.matching(req.search()));
-        }
 
         if (req.fileType() != null && !req.fileType().isEmpty()) {
             List<String> cleaned = BookListRequest.cleanValues(req.fileType());
@@ -1053,7 +1053,8 @@ public class AppBookService {
             specs.add(AppBookSpecification.withProgress(userId, true));
         }
 
-        return AppBookSpecification.combine(specs.toArray(Specification[]::new));
+        Specification<BookEntity> scope = AppBookSpecification.combine(specs.toArray(Specification[]::new));
+        return AppBookSpecification.combine(scope, searchResolver.resolve(req.search(), scope));
     }
 
     private String getSortField(String sortBy) {

@@ -212,8 +212,9 @@ public class BookFacetService {
             String preserved = BrowseParams.preserved(facet, facetLogicParam, query);
             List<FacetGroup> groups = new ArrayList<>();
             groups.add(sortGroup(preserved));
+            Specification<BookEntity> search = filterSpecifications.search(query, facets, facetLogic, userId, isAdmin, libraryIds);
             for (FacetDef def : requestedFacets) {
-                Specification<BookEntity> base = filterSpecifications.base(query, facets, facetLogic, userId, isAdmin, libraryIds, def.key());
+                Specification<BookEntity> base = filterSpecifications.withSearch(search, facets, facetLogic, userId, isAdmin, libraryIds, def.key());
                 Long distinctCount = DISTINCT_COUNT_FACETS.contains(def.key()) ? distinctCount(def, base, userId) : null;
                 LookupFacet<?> lookup = LOOKUP_FACETS.get(def.key());
                 List<FacetCount> counts = lookup != null ? countByLookup(lookup, base) : count(def, base, userId);

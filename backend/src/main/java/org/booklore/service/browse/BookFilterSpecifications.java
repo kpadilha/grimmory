@@ -26,17 +26,32 @@ public class BookFilterSpecifications {
 
     private final BookFacetRegistry facetRegistry;
     private final UserContentRestrictionRepository restrictionRepository;
+    private final BookSearchResolver searchResolver;
 
     public Specification<BookEntity> base(String query, Map<String, List<String>> facets, FacetLogic facetLogic,
                                           Long userId, boolean isAdmin, Set<Long> libraryIds, String omitFacet) {
+        return withSearch(search(query, facets, facetLogic, userId, isAdmin, libraryIds), facets, facetLogic, userId, isAdmin, libraryIds, omitFacet);
+    }
+
+    /** The query's search spec, resolved once against every facet so all facet groups share it. */
+    public Specification<BookEntity> search(String query, Map<String, List<String>> facets, FacetLogic facetLogic,
+                                            Long userId, boolean isAdmin, Set<Long> libraryIds) {
+        if (query == null || query.isBlank()) {
+            return null;
+        }
+        return searchResolver.resolve(query, withSearch(null, facets, facetLogic, userId, isAdmin, libraryIds, null));
+    }
+
+    public Specification<BookEntity> withSearch(Specification<BookEntity> search, Map<String, List<String>> facets, FacetLogic facetLogic,
+                                                Long userId, boolean isAdmin, Set<Long> libraryIds, String omitFacet) {
         List<Specification<BookEntity>> specs = new ArrayList<>();
         specs.add(AppBookSpecification.notDeleted());
         if (!isAdmin) {
             specs.add(inLibraries(libraryIds));
             specs.add(ContentRestrictionSpecification.from(restrictionRepository.findByUserId(userId)));
         }
-        if (query != null && !query.isBlank()) {
-            specs.add(BookSearchSpecification.matching(query));
+        if (search != null) {
+            specs.add(search);
         }
         for (Map.Entry<String, List<String>> entry : facets.entrySet()) {
             if (Objects.equals(entry.getKey(), omitFacet)) {
