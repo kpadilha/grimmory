@@ -454,6 +454,31 @@ class BookBrowseRegistryTest {
                 .isEqualTo("title glynn kıncaid kıncaid genre as glynnis kıncaid");
     }
 
+    @Test
+    void caseOnlyRenameLeavesBooksUnloaded() {
+        BookEntity book = book("Title", null, null, Instant.now(), List.of("Space Opera"), List.of("Glynn Stewart"), null);
+        book.getMetadata().getTags().add(tag("as Glynnis Kincaid"));
+        em.flush();
+        Long authorId = authors.get("Glynn Stewart").getId();
+        Long categoryId = categories.get("Space Opera").getId();
+        Long tagId = book.getMetadata().getTags().iterator().next().getId();
+        em.clear();
+
+        AuthorEntity author = em.find(AuthorEntity.class, authorId);
+        CategoryEntity category = em.find(CategoryEntity.class, categoryId);
+        TagEntity tag = em.find(TagEntity.class, tagId);
+        author.rename("GLYNN STEWART");
+        category.rename("space opera");
+        tag.rename("As Glynnis Kincaid");
+
+        assertThat(org.hibernate.Hibernate.isInitialized(author.getBookMetadataEntityList())).isFalse();
+        assertThat(org.hibernate.Hibernate.isInitialized(category.getBookMetadataEntityList())).isFalse();
+        assertThat(org.hibernate.Hibernate.isInitialized(tag.getBookMetadataEntityList())).isFalse();
+        em.flush();
+        em.clear();
+        assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText()).isEqualTo("title glynn stewart space opera as glynnis kincaid");
+    }
+
     private TagEntity tag(String name) {
         TagEntity tag = TagEntity.builder().name(name).build();
         em.persist(tag);
