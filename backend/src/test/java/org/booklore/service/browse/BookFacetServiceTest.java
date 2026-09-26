@@ -120,7 +120,7 @@ class BookFacetServiceTest {
                 .build();
     }
 
-    private void book(String title, String genre, String authorName) {
+    private BookEntity book(String title, String genre, String authorName) {
         BookEntity bookEntity = BookEntity.builder()
                 .library(library).libraryPath(libraryPath).addedOn(Instant.now()).deleted(false).build();
         em.persist(bookEntity);
@@ -129,6 +129,7 @@ class BookFacetServiceTest {
         metadata.setAuthors(List.of(author(authorName)));
         em.persist(metadata);
         bookEntity.setMetadata(metadata);
+        return bookEntity;
     }
 
     private CategoryEntity category(String name) {
@@ -350,6 +351,40 @@ class BookFacetServiceTest {
         Link filtered = facetService.getFacets(List.of("genre:Horror"), null, "dune").links().getFirst();
         assertThat(filtered.rel()).containsExactly("self");
         assertThat(filtered.href()).isEqualTo("/api/v1/books/facets?facet=genre%3AHorror&query=dune");
+    }
+
+    @Test
+    void getFacetValueBookIdsReturnsExhaustiveBookIdsPerValueUncapped() {
+        BookEntity a = book("A", "Horror", "Alice");
+        BookEntity b = book("B", "Horror", "Bob");
+        BookEntity c = book("C", "Romance", "Alice");
+        em.flush();
+
+        Map<String, List<org.booklore.model.dto.browse.FacetValueBookIds>> result =
+                facetService.getFacetValueBookIds(List.of("genre", "author"));
+
+        List<org.booklore.model.dto.browse.FacetValueBookIds> genre = result.get("genre");
+        assertThat(genre).extracting(org.booklore.model.dto.browse.FacetValueBookIds::value)
+                .containsExactlyInAnyOrder("Horror", "Romance");
+        assertThat(genre.stream().filter(v -> v.value().equals("Horror")).findFirst().orElseThrow().bookIds())
+                .containsExactlyInAnyOrder(a.getId(), b.getId());
+
+        List<org.booklore.model.dto.browse.FacetValueBookIds> author = result.get("author");
+        assertThat(author.stream().filter(v -> v.value().equals("Alice")).findFirst().orElseThrow().bookIds())
+                .containsExactlyInAnyOrder(a.getId(), c.getId());
+    }
+
+    @Test
+    void getFacetValueBookIdsUncappedBeyondTheHundredValueFacetLimit() {
+        for (int i = 0; i < 101; i++) {
+            book("T" + i, "Genre" + i, "Author" + i);
+        }
+        em.flush();
+
+        Map<String, List<org.booklore.model.dto.browse.FacetValueBookIds>> result =
+                facetService.getFacetValueBookIds(List.of("genre"));
+
+        assertThat(result.get("genre")).hasSize(101);
     }
 
     // Serializes through the Spring-managed Jackson 3 mapper, the same one the HTTP

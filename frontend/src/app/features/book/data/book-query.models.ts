@@ -40,3 +40,9 @@ export function toFacetTotalCount(result: BrowseFacetResult | undefined, key: st
 export function toFacetDistinctCount(result: BrowseFacetResult | undefined, key: string): number {
   return facetValues(result, key).length;
 }
+
+// Distinct values for a facet group (e.g. every genre in the library) - server-aggregated,
+// never a client scan of the full book collection.
+export function toFacetValues(result: BrowseFacetResult | undefined, key: string): string[] {
+  return facetValues(result, key).map(v => v.value);
+}

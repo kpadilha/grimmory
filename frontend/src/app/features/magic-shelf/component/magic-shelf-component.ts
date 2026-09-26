@@ -19,7 +19,10 @@ import {CheckboxChangeEvent, Checkbox} from "@openng/optimus-ui/checkbox";
 import {UserService} from "../../settings/user-management/user.service";
 import {IconDisplayComponent} from '../../../shared/components/icon-display/icon-display.component';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
-import {BookService} from '../../book/service/book.service';
+import {injectQuery} from '@tanstack/angular-query-experimental';
+import {BookQueryService} from '../../book/data/book-query.service';
+import {GLOBAL_FACETS_PARAMS} from '../../book/data/book-query-params';
+import {toFacetValues} from '../../book/data/book-query.models';
 import {ShelfService} from '../../book/service/shelf.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {Textarea} from '@openng/optimus-ui/textarea';
@@ -437,17 +440,14 @@ export class MagicShelfComponent implements OnInit {
       value: shelf.id!
     }))
   );
-  categoryOptions = computed(() => {
-    const categoriesSet = new Set<string>();
-    this.bookService.books().forEach(book => {
-      book.metadata?.categories?.forEach(category => categoriesSet.add(category));
-    });
-
-    return Array.from(categoriesSet).map(category => ({
+  // Distinct category values from the server's 'genre' facet - never the full collection.
+  private readonly categoryFacetQuery = injectQuery(() => this.bookQueryService.facets(GLOBAL_FACETS_PARAMS));
+  categoryOptions = computed(() =>
+    toFacetValues(this.categoryFacetQuery.data(), 'genre').map(category => ({
       label: category,
       value: category
-    })).sort((a, b) => a.label.localeCompare(b.label));
-  });
+    })).sort((a, b) => a.label.localeCompare(b.label))
+  );
 
   form = new FormGroup({
     name: new FormControl<string | null>(null),
@@ -464,7 +464,7 @@ export class MagicShelfComponent implements OnInit {
 
   libraryService = inject(LibraryService);
   shelfService = inject(ShelfService);
-  bookService = inject(BookService);
+  bookQueryService = inject(BookQueryService);
   magicShelfService = inject(MagicShelfService);
   ref = inject(DynamicDialogRef);
   messageService = inject(MessageService);

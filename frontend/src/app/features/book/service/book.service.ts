@@ -1,7 +1,7 @@
 import {computed, effect, inject, Injectable} from '@angular/core';
-import {first, from, lastValueFrom, Observable, throwError} from 'rxjs';
+import {from, lastValueFrom, Observable, throwError} from 'rxjs';
 import {HttpClient, HttpParams} from '@angular/common/http';
-import {catchError, map, tap} from 'rxjs/operators';
+import {catchError, tap} from 'rxjs/operators';
 import {Book, BookDeletionResponse, BookRecommendation, BookSetting, BookStatusUpdateResponse, BookType, CreatePhysicalBookRequest, PersonalRatingUpdateResponse, ReadStatus} from '../model/book.model';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {MessageService} from '@openng/optimus-ui/api';
@@ -26,8 +26,8 @@ import {
   patchBooksInCache,
 } from './legacy-book-cache';
 import {BookQueryService} from '../data/book-query.service';
-import {GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
-import {toFacetTotalCount} from '../data/book-query.models';
+import {DEFAULT_BOOK_SORT_TERMS, GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
+import {bookSummaryToBook, toFacetTotalCount} from '../data/book-query.models';
 
 @Injectable({
   providedIn: 'root',
@@ -181,19 +181,24 @@ export class BookService {
     return this.books().filter(book => idSet.has(+book.id));
   }
 
+  // Server-scoped by the book's own series (facet=series:<name>) - never the full collection
+  // just to find its series-mates. Series-name matching is case-insensitive server-side too.
   getBooksInSeries(bookId: number): Observable<Book[]> {
-    return from(this.queryClient.ensureQueryData(this.getBooksQueryOptions())).pipe(
-      map(books => {
-        const currentBook = books.find(book => book.id === bookId);
-        if (!currentBook?.metadata?.seriesName) {
-          return [];
-        }
+    return from(this.fetchBooksInSeries(bookId));
+  }
 
-        const seriesName = currentBook.metadata.seriesName.toLowerCase();
-        return books.filter(book => book.metadata?.seriesName?.toLowerCase() === seriesName);
-      }),
-      first()
+  private async fetchBooksInSeries(bookId: number): Promise<Book[]> {
+    const book = await this.ensureBookDetail(bookId, false);
+    const seriesName = book.metadata?.seriesName;
+    if (!seriesName) {
+      return [];
+    }
+
+    const summaries = await this.bookQueryService.fetchAllPages(
+      {facets: {series: [seriesName]}, facetLogic: 'and', sort: DEFAULT_BOOK_SORT_TERMS, size: 100},
+      new AbortController().signal,
     );
+    return summaries.map(bookSummaryToBook);
   }
 
   getBookRecommendations(bookId: number, limit: number = 20): Observable<BookRecommendation[]> {

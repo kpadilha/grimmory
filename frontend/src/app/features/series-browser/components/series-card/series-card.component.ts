@@ -38,10 +38,9 @@ export class SeriesCardComponent {
   getCoverUrl(index: number): string | null {
     const book = this.series.coverBooks[index];
     if (!book) return null;
-    const isAudiobook = book.primaryFile?.bookType === 'AUDIOBOOK';
-    return isAudiobook
-      ? this.urlHelper.getAudiobookThumbnailUrl(book.id, book.metadata?.audiobookCoverUpdatedOn)
-      : this.urlHelper.getThumbnailUrl(book.id, book.metadata?.coverUpdatedOn);
+    return book.bookType === 'AUDIOBOOK'
+      ? this.urlHelper.getAudiobookThumbnailUrl(book.id, book.audiobookCoverUpdatedOn)
+      : this.urlHelper.getThumbnailUrl(book.id, book.coverUpdatedOn);
   }
 
   onCardClick(event: Event): void {
@@ -51,8 +50,8 @@ export class SeriesCardComponent {
 
   readNext(event: MouseEvent): void {
     event.stopPropagation();
-    if (this.series.nextUnread) {
-      this.bookService.readBook(this.series.nextUnread.id);
+    if (this.series.nextUnreadBookId != null) {
+      this.bookService.readBook(this.series.nextUnreadBookId);
     }
   }
 }

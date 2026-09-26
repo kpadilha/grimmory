@@ -5,7 +5,6 @@ import {tap} from 'rxjs/operators';
 import {injectQuery, queryOptions, QueryClient} from '@tanstack/angular-query-experimental';
 
 import {Library} from '../model/library.model';
-import {BookService} from './book.service';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {AuthService} from '../../../shared/service/auth.service';
 import {LIBRARIES_QUERY_KEY, libraryFormatCountsQueryKey} from './library-query-keys';
@@ -21,7 +20,6 @@ import {toFacetNumericCountMap} from '../data/book-query.models';
 export class LibraryService {
   private readonly url = `${API_CONFIG.BASE_URL}/api/v1/libraries`;
   private http = inject(HttpClient);
-  private bookService = inject(BookService);
   private authService = inject(AuthService);
   private queryClient = inject(QueryClient);
   private readonly bookQueryService = inject(BookQueryService);
@@ -135,10 +133,6 @@ export class LibraryService {
 
   findLibraryById(id: number): Library | undefined {
     return this.libraries().find(library => library.id === id);
-  }
-
-  getBookCountValue(libraryId: number): number {
-    return this.bookService.books().filter(book => book.libraryId === libraryId).length;
   }
 
   readonly bookCountByLibraryId = computed(() => toFacetNumericCountMap(this.globalFacetsQuery.data(), 'library'));

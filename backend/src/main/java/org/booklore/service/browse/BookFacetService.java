@@ -17,12 +17,14 @@ import org.booklore.browse.FacetLogic;
 import org.booklore.browse.Link;
 import org.booklore.browse.ParamsHash;
 import org.booklore.config.security.service.AuthenticationService;
+import org.booklore.exception.ApiError;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.browse.FacetGroupsResponse;
 import org.booklore.model.dto.browse.FacetGroupsResponse.FacetGroup;
 import org.booklore.model.dto.browse.FacetGroupsResponse.FacetLink;
 import org.booklore.model.dto.browse.FacetGroupsResponse.Metadata;
 import org.booklore.model.dto.browse.FacetGroupsResponse.Properties;
+import org.booklore.model.dto.browse.FacetValueBookIds;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.UserBookProgressEntity;
@@ -34,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -151,6 +154,49 @@ public class BookFacetService {
     // Package-private: lets tests reset the shared singleton cache between runs.
     void clearCache() {
         cache.invalidateAll();
+    }
+
+    // Exhaustive value -> book id map per requested facet key, unlike getFacets() this is never
+    // capped at MAX_VALUES - metadata merge/rename/delete needs every affected book, not the top 100.
+    public Map<String, List<FacetValueBookIds>> getFacetValueBookIds(List<String> facetKeys) {
+        BookLoreUser user = authenticationService.getAuthenticatedUser();
+        Long userId = user.getId();
+        boolean isAdmin = user.getPermissions().isAdmin();
+        Set<Long> libraryIds = BookFilterSpecifications.libraryIds(user);
+
+        Map<String, List<FacetValueBookIds>> result = new LinkedHashMap<>();
+        for (String key : facetKeys) {
+            FacetDef def = FACETS.stream().filter(f -> f.key().equals(key)).findFirst()
+                    .orElseThrow(() -> ApiError.INVALID_FACET.createException("Unknown facet: " + key));
+            Specification<BookEntity> base = filterSpecifications.base(null, Map.of(), FacetLogic.AND, userId, isAdmin, libraryIds, key);
+            result.put(key, valueBookIds(def, base, userId));
+        }
+        return result;
+    }
+
+    private List<FacetValueBookIds> valueBookIds(FacetDef def, Specification<BookEntity> base, Long userId) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Tuple> cq = cb.createTupleQuery();
+        Root<BookEntity> root = cq.from(BookEntity.class);
+        Expression<?> value = def.value().apply(cb, root, userId);
+
+        List<Predicate> predicates = new ArrayList<>();
+        Predicate basePredicate = base.toPredicate(root, cq, cb);
+        if (basePredicate != null) {
+            predicates.add(basePredicate);
+        }
+        predicates.add(cb.isNotNull(value));
+
+        cq.multiselect(value.alias("value"), root.get("id").alias("bookId"));
+        cq.where(predicates.toArray(Predicate[]::new));
+        cq.orderBy(cb.asc(value));
+
+        Map<String, List<Long>> grouped = new LinkedHashMap<>();
+        for (Tuple tuple : entityManager.createQuery(cq).getResultList()) {
+            String key = String.valueOf(tuple.get("value"));
+            grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(((Number) tuple.get("bookId")).longValue());
+        }
+        return grouped.entrySet().stream().map(e -> new FacetValueBookIds(e.getKey(), e.getValue())).toList();
     }
 
     private List<FacetCount> count(FacetDef def, Specification<BookEntity> base, Long userId) {
