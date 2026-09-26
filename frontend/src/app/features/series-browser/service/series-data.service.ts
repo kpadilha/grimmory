@@ -1,7 +1,8 @@
 import {computed, inject, Injectable} from '@angular/core';
 import {HttpClient} from '@angular/common/http';
-import {lastValueFrom} from 'rxjs';
-import {injectQuery, queryOptions} from '@tanstack/angular-query-experimental';
+import {lastValueFrom, Observable} from 'rxjs';
+import {map, takeUntil} from 'rxjs/operators';
+import {infiniteQueryOptions, injectQuery} from '@tanstack/angular-query-experimental';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {AuthService} from '../../../shared/service/auth.service';
 import {ReadStatus} from '../../book/model/book.model';
@@ -9,8 +10,10 @@ import {BookQueryService} from '../../book/data/book-query.service';
 import {GLOBAL_FACETS_PARAMS} from '../../book/data/book-query-params';
 import {toFacetDistinctCount} from '../../book/data/book-query.models';
 import {SeriesCoverBook, SeriesSummary} from '../model/series.model';
-
-const SERIES_SUMMARY_QUERY_KEY = ['books', 'series', 'summary'] as const;
+import {BrowseLink, BrowsePage, BrowsePageMetadata, findBrowsePageLink} from '../../../core/data/browse.models';
+import {mapBrowsePage} from '../../../core/data/browse-response';
+import {abortSignal, QUERY_DEFAULTS} from '../../../core/data/query-transport';
+import {normalizeSeriesQueryParams, SeriesQueryParams, toSeriesPageHttpParams} from '../data/series-query-params';
 
 interface SeriesCoverBookDto {
   bookId: number;
@@ -33,26 +36,38 @@ interface SeriesSummaryDto {
   coverBooks: SeriesCoverBookDto[];
 }
 
+interface RawSeriesPage {
+  content: SeriesSummaryDto[];
+  page: BrowsePageMetadata;
+  links: BrowseLink[];
+}
+
+export type SeriesPage = BrowsePage<SeriesSummary>;
+
 @Injectable({
   providedIn: 'root'
 })
 export class SeriesDataService {
 
   private readonly http = inject(HttpClient);
-  private readonly bookQueryService = inject(BookQueryService);
   private readonly authService = inject(AuthService);
+  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
   private readonly url = `${API_CONFIG.BASE_URL}/api/v1/books/series/summary`;
 
-  private seriesSummaryQuery = injectQuery(() => ({
-    ...this.getSeriesSummaryQueryOptions(),
-    enabled: !!this.token(),
-  }));
-
-  // Server-aggregated per-series data (SeriesSummaryService), not a client scan of bookService.books().
-  allSeries = computed(() => this.seriesSummaryQuery.data() ?? []);
-
-  isSeriesLoading = computed(() => !!this.token() && this.seriesSummaryQuery.isPending());
+  // The series grid is server-paginated like the book browser - search/sort/status all run
+  // server-side (SeriesSummaryService), so the client only ever holds the pages it has scrolled.
+  infinitePage(params: SeriesQueryParams) {
+    const normalized = normalizeSeriesQueryParams(params);
+    return infiniteQueryOptions({
+      queryKey: ['books', 'series', 'summary', normalized] as const,
+      queryFn: ({pageParam, signal}) => this.fetchPage(normalized, pageParam, signal),
+      initialPageParam: null as string | null,
+      getNextPageParam: page => findBrowsePageLink(page, 'next')?.href,
+      enabled: !!this.token(),
+      ...QUERY_DEFAULTS,
+    });
+  }
 
   // Sidebar badge count from the server's series facet group, not the full 132k-book collection.
   private readonly globalFacetsQuery = injectQuery(() => ({
@@ -62,13 +77,21 @@ export class SeriesDataService {
 
   readonly totalSeriesCount = computed(() => toFacetDistinctCount(this.globalFacetsQuery.data(), 'series'));
 
-  private getSeriesSummaryQueryOptions() {
-    return queryOptions({
-      queryKey: SERIES_SUMMARY_QUERY_KEY,
-      queryFn: () => lastValueFrom(this.http.get<SeriesSummaryDto[]>(this.url)).then(dtos => dtos.map(toSeriesSummary)),
-    });
-  }
+  private fetchPage(params: SeriesQueryParams, nextHref: string | null, signal: AbortSignal): Promise<SeriesPage> {
+    const request$: Observable<RawSeriesPage> = nextHref !== null
+      ? this.http.get<RawSeriesPage>(`${API_CONFIG.BASE_URL}${nextHref}`)
+      : this.http.get<RawSeriesPage>(this.url, {params: toSeriesPageHttpParams(params)});
 
+    return lastValueFrom(request$.pipe(
+      map(mapSeriesPage),
+      takeUntil(abortSignal(signal)),
+    ));
+  }
+}
+
+function mapSeriesPage(raw: RawSeriesPage): SeriesPage {
+  const page = mapBrowsePage<SeriesSummaryDto>(raw);
+  return {...page, content: page.content.map(toSeriesSummary)};
 }
 
 function toSeriesSummary(dto: SeriesSummaryDto): SeriesSummary {
