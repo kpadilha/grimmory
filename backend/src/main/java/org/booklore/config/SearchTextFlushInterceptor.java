@@ -3,7 +3,9 @@ package org.booklore.config;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.hibernate.Interceptor;
 import org.hibernate.collection.spi.PersistentCollection;
+import org.hibernate.type.Type;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Iterator;
 
@@ -22,6 +24,23 @@ public class SearchTextFlushInterceptor implements Interceptor {
                 metadata.updateSearchText();
             }
         }
+    }
+
+    // Registering any Interceptor drops the bytecode-enhanced fast-path dirty check for
+    // @SecondaryTable entities (Hibernate 7.4.8), silently losing primary-table column updates.
+    @Override
+    public int[] findDirty(Object entity, Object id, Object[] currentState, Object[] previousState, String[] propertyNames, Type[] types) {
+        if (previousState == null) {
+            return null;
+        }
+        int[] dirty = new int[types.length];
+        int count = 0;
+        for (int i = 0; i < types.length; i++) {
+            if (!types[i].isEqual(previousState[i], currentState[i])) {
+                dirty[count++] = i;
+            }
+        }
+        return count == 0 ? null : Arrays.copyOf(dirty, count);
     }
 
     // A plain collection was assigned by the caller; a persistent one reports its own changes.
