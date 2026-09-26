@@ -221,14 +221,18 @@ public class SeriesSummaryService {
         };
     }
 
+    // Every branch ends in the name tiebreaker (displayName is unique per series key) so page
+    // boundaries stay deterministic across a cache refresh mid-scroll, even when e.g. two series
+    // tie on book count.
     private static List<SeriesAggregate> sortAggregates(List<SeriesAggregate> aggregates, String sort) {
+        Comparator<SeriesAggregate> nameAsc = Comparator.comparing(SeriesAggregate::displayName, String.CASE_INSENSITIVE_ORDER);
         Comparator<SeriesAggregate> comparator = switch (sort == null ? "name-asc" : sort) {
-            case "name-desc" -> Comparator.comparing(SeriesAggregate::displayName, String.CASE_INSENSITIVE_ORDER).reversed();
-            case "book-count" -> Comparator.comparingInt(SeriesAggregate::bookCount).reversed();
-            case "progress" -> Comparator.comparingDouble(SeriesAggregate::progress).reversed();
-            case "recently-read" -> Comparator.comparing(SeriesAggregate::lastReadTime, Comparator.nullsFirst(Comparator.naturalOrder())).reversed();
-            case "recently-added" -> Comparator.comparing(SeriesAggregate::addedOn, Comparator.nullsFirst(Comparator.naturalOrder())).reversed();
-            default -> Comparator.comparing(SeriesAggregate::displayName, String.CASE_INSENSITIVE_ORDER);
+            case "name-desc" -> nameAsc.reversed();
+            case "book-count" -> Comparator.comparingInt(SeriesAggregate::bookCount).reversed().thenComparing(nameAsc);
+            case "progress" -> Comparator.comparingDouble(SeriesAggregate::progress).reversed().thenComparing(nameAsc);
+            case "recently-read" -> Comparator.comparing(SeriesAggregate::lastReadTime, Comparator.nullsFirst(Comparator.naturalOrder())).reversed().thenComparing(nameAsc);
+            case "recently-added" -> Comparator.comparing(SeriesAggregate::addedOn, Comparator.nullsFirst(Comparator.naturalOrder())).reversed().thenComparing(nameAsc);
+            default -> nameAsc;
         };
         List<SeriesAggregate> sorted = new ArrayList<>(aggregates);
         sorted.sort(comparator);
