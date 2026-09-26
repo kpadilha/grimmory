@@ -11,14 +11,12 @@ import {TranslocoDirective, TranslocoPipe, TranslocoService} from '@jsverse/tran
 import {RouteScrollPositionService} from '../../../../shared/service/route-scroll-position.service';
 import {MessageService} from '@openng/optimus-ui/api';
 import {AuthorService} from '../../service/author.service';
-import {AuthorSummary, EnrichedAuthor, AuthorFilters, DEFAULT_AUTHOR_FILTERS} from '../../model/author.model';
+import {AuthorSummary, EnrichedAuthor, AuthorFilters, DEFAULT_AUTHOR_FILTERS, enrichAuthor} from '../../model/author.model';
 import {AuthorCardComponent} from '../author-card/author-card.component';
 import {AuthorSelectionService, AuthorCheckboxClickEvent} from '../../service/author-selection.service';
 import {PageTitleService} from '../../../../shared/service/page-title.service';
 import {ActivatedRoute, Router} from '@angular/router';
 import {UserService} from '../../../settings/user-management/user.service';
-import {BookService} from '../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../book/model/book.model';
 import {createVirtualGrid} from '../../../../shared/util/virtual-grid.util';
 import {GridDensityButtonsComponent, type GridDensityDirection} from '../../../../shared/components/grid-density-buttons/grid-density-buttons.component';
 import {LocalStorageService} from '../../../../shared/service/local-storage.service';
@@ -85,7 +83,6 @@ export class AuthorBrowserComponent implements OnInit {
   private static readonly MAX_SCALE = 1.3;
 
   private authorService = inject(AuthorService);
-  private bookService = inject(BookService);
   private messageService = inject(MessageService);
   private pageTitle = inject(PageTitleService);
   private scrollService = inject(RouteScrollPositionService);
@@ -126,21 +123,14 @@ export class AuthorBrowserComponent implements OnInit {
   private selectedAuthors = this.selectionService.selectedAuthors;
   private allAuthorsState = signal<AuthorSummary[] | null>(null);
 
-  loading = computed(() => this.allAuthorsState() === null || this.bookService.isBooksLoading());
+  loading = computed(() => this.allAuthorsState() === null);
   protected currentUser = this.userService.currentUser;
   selectedCount = computed(() => this.selectedAuthors().size);
   searchTerm = signal('');
   sortBy = signal('name');
   sortDirection = signal<SortDirection>('asc');
   filters = signal<AuthorFilters>({...DEFAULT_AUTHOR_FILTERS});
-  private enrichedAuthors = computed(() => {
-    const authors = this.allAuthorsState();
-    if (!authors) {
-      return [];
-    }
-
-    return this.enrichAuthors(authors, this.bookService.books());
-  });
+  private enrichedAuthors = computed(() => (this.allAuthorsState() ?? []).map(enrichAuthor));
   libraryOptions = computed<FilterOption[]>(() => {
     const allLabel = this.t.translate('authorBrowser.filters.all');
     const librarySet = new Set<string>();
@@ -423,88 +413,6 @@ export class AuthorBrowserComponent implements OnInit {
       queryParams: {sort, dir},
       queryParamsHandling: 'merge',
       replaceUrl: true
-    });
-  }
-
-  private enrichAuthors(authors: AuthorSummary[], books: Book[]): EnrichedAuthor[] {
-    const booksByAuthor = new Map<string, Book[]>();
-    for (const book of books) {
-      if (book.metadata?.authors) {
-        for (const authorName of book.metadata.authors) {
-          const key = authorName.toLowerCase();
-          let list = booksByAuthor.get(key);
-          if (!list) {
-            list = [];
-            booksByAuthor.set(key, list);
-          }
-          list.push(book);
-        }
-      }
-    }
-
-    return authors.map(author => {
-      const authorBooks = booksByAuthor.get(author.name.toLowerCase()) || [];
-
-      const libraryIds = new Set<number>();
-      const libraryNameSet = new Set<string>();
-      const categorySet = new Set<string>();
-      const seriesSet = new Set<string>();
-      let latestAddedOn: string | null = null;
-      let lastReadTime: string | null = null;
-      let readCount = 0;
-      let inProgressCount = 0;
-      let ratingSum = 0;
-      let ratingCount = 0;
-
-      for (const book of authorBooks) {
-        libraryIds.add(book.libraryId);
-        if (book.libraryName) libraryNameSet.add(book.libraryName);
-
-        if (book.metadata?.categories) {
-          for (const cat of book.metadata.categories) categorySet.add(cat);
-        }
-        if (book.metadata?.seriesName) {
-          seriesSet.add(book.metadata.seriesName.toLowerCase());
-        }
-        if (book.addedOn && (!latestAddedOn || book.addedOn > latestAddedOn)) {
-          latestAddedOn = book.addedOn;
-        }
-        if (book.lastReadTime && (!lastReadTime || book.lastReadTime > lastReadTime)) {
-          lastReadTime = book.lastReadTime;
-        }
-        if (book.readStatus === ReadStatus.READ) readCount++;
-        if (book.readStatus === ReadStatus.READING || book.readStatus === ReadStatus.RE_READING) inProgressCount++;
-        if (book.personalRating != null) {
-          ratingSum += book.personalRating;
-          ratingCount++;
-        }
-      }
-
-      const totalBooks = authorBooks.length;
-      let readStatus: EnrichedAuthor['readStatus'] = 'unread';
-      if (totalBooks > 0) {
-        if (readCount === totalBooks) {
-          readStatus = 'all-read';
-        } else if (inProgressCount > 0) {
-          readStatus = 'in-progress';
-        } else if (readCount > 0) {
-          readStatus = 'some-read';
-        }
-      }
-
-      return {
-        ...author,
-        libraryIds,
-        libraryNames: [...libraryNameSet].sort(),
-        categories: [...categorySet].sort(),
-        readStatus,
-        hasSeries: seriesSet.size > 0,
-        seriesCount: seriesSet.size,
-        latestAddedOn,
-        lastReadTime,
-        readingProgress: totalBooks > 0 ? Math.round((readCount / totalBooks) * 100) : 0,
-        avgPersonalRating: ratingCount > 0 ? ratingSum / ratingCount : null
-      };
     });
   }
 

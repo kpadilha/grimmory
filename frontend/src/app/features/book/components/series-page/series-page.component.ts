@@ -30,9 +30,12 @@ import {BookCardOverlayPreferenceService} from '../legacy-book-card/book-card-ov
 import {UrlHelperService} from '../../../../shared/service/url-helper.service';
 import {LanguageResolverService} from '../../../../shared/service/language-resolver.service';
 import {CoverComponent} from '../../../../shared/components/cover/cover.component';
-import {injectQuery} from '@tanstack/angular-query-experimental';
+import {injectInfiniteQuery, injectQuery} from '@tanstack/angular-query-experimental';
 import {AuthorService} from '../../../author-browser/service/author.service';
 import {LayoutService} from '../../../../shared/layout/layout.service';
+import {BookQueryService} from '../../data/book-query.service';
+import {BookPageParams} from '../../data/book-query-params';
+import {bookSummaryToBook} from '../../data/book-query.models';
 
 interface ReadStatusSegment {
   status: ReadStatus;
@@ -100,8 +103,10 @@ export class SeriesPageComponent implements AfterViewChecked {
   private readonly DESKTOP_SERIES_GRID_GAP = 21;
   private readonly MOBILE_SERIES_GRID_GAP = 8;
   private readonly MOBILE_GRID_COLUMNS = 2;
+  private readonly SERIES_PAGE_SIZE = 100;
   private route = inject(ActivatedRoute);
   private bookService = inject(BookService);
+  private bookQueryService = inject(BookQueryService);
   private languageResolver = inject(LanguageResolverService);
   private bookMetadataManageService = inject(BookMetadataManageService);
   private metadataCenterViewMode: "route" | "dialog" = "route";
@@ -129,7 +134,9 @@ export class SeriesPageComponent implements AfterViewChecked {
   readonly isOverflowing = signal(false);
   protected appSettings = this.appSettingsService.appSettings;
   protected currentUser = this.userService.currentUser;
-  protected isBooksLoading = this.bookService.isBooksLoading;
+  // Lazy computed - safe to reference seriesBooksQuery here even though it's declared later,
+  // since the callback only runs on first read, after all fields are initialised.
+  protected isBooksLoading = computed(() => this.seriesBooksQuery.isPending());
 
   // Selection state
   readonly selectedBooks = signal(new Set<number>());
@@ -147,11 +154,25 @@ export class SeriesPageComponent implements AfterViewChecked {
     map((params) => params.get("seriesName") || ""),
   ), {initialValue: ""});
 
+  // Server-scoped to this one series via the 'series' facet - never the full collection.
+  private readonly seriesQueryParams = computed<BookPageParams>(() => {
+    const seriesName = this.seriesParam().trim();
+    return {
+      facets: seriesName ? {series: [seriesName]} : {},
+      facetLogic: 'and',
+      sort: [{key: 'seriesNumber', direction: 'asc'}],
+      size: this.SERIES_PAGE_SIZE,
+    };
+  });
+  private readonly seriesBooksQuery = injectInfiniteQuery(() => ({
+    ...this.bookQueryService.infinitePage(this.seriesQueryParams()),
+    enabled: this.seriesParam().trim().length > 0,
+  }));
+
   filteredBooks = computed(() => {
-    const seriesName = this.seriesParam().trim().toLowerCase();
-    const inSeries = this.bookService.books().filter(
-      (book) => book.metadata?.seriesName?.trim().toLowerCase() === seriesName
-    );
+    const inSeries = (this.seriesBooksQuery.data()?.pages ?? [])
+      .flatMap(page => page.content)
+      .map(bookSummaryToBook);
 
     return [...inSeries].sort((a, b) => {
       const aNum = a.metadata?.seriesNumber ?? Number.MAX_SAFE_INTEGER;
@@ -388,6 +409,14 @@ export class SeriesPageComponent implements AfterViewChecked {
         user
       ));
       this.moreActionsMenuItems.set(this.bookMenuService.getMoreActionsMenu(this.selectedBooks(), user));
+    });
+
+    // The page renders every book in the series at once (no scroll pagination), so drain pages
+    // automatically instead of waiting for user scroll.
+    effect(() => {
+      if (this.seriesBooksQuery.hasNextPage() && !this.seriesBooksQuery.isFetchingNextPage()) {
+        void this.seriesBooksQuery.fetchNextPage();
+      }
     });
 
     effect((onCleanup) => {

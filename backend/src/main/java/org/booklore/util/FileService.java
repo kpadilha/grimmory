@@ -27,7 +27,9 @@ import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -103,6 +105,34 @@ public class FileService {
 
     public String getAuthorThumbnailFile(long authorId) {
         return Paths.get(appProperties.getPathConfig(), AUTHOR_IMAGES_DIR, String.valueOf(authorId), AUTHOR_THUMBNAIL_FILENAME).toString();
+    }
+
+    // Author image folder and thumbnail are always written/deleted together (see saveAuthorImages,
+    // deleteAuthorImages), so folder presence is a valid proxy - one readdir instead of per-author stats.
+    public Set<Long> listAuthorIdsWithPhotos() {
+        Path root = Paths.get(appProperties.getPathConfig(), AUTHOR_IMAGES_DIR);
+        if (!Files.isDirectory(root)) {
+            return Set.of();
+        }
+        try (Stream<Path> entries = Files.list(root)) {
+            return entries
+                    .filter(Files::isDirectory)
+                    .map(path -> path.getFileName().toString())
+                    .map(FileService::parseAuthorId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+        } catch (IOException e) {
+            log.warn("Failed to list author image folders: {}", e.getMessage());
+            return Set.of();
+        }
+    }
+
+    private static Long parseAuthorId(String folderName) {
+        try {
+            return Long.parseLong(folderName);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     public String getBackgroundsFolder(Long userId) {

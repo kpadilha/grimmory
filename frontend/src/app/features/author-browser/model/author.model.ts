@@ -1,22 +1,53 @@
+// All fields below are computed server-side (AuthorMetadataService.getAllAuthors, bulk-aggregated
+// per page) - the author browser never downloads the book collection to derive them.
 export interface AuthorSummary {
   id: number;
   name: string;
   asin?: string;
   bookCount: number;
   hasPhoto: boolean;
-}
-
-export interface EnrichedAuthor extends AuthorSummary {
-  libraryIds: Set<number>;
   libraryNames: string[];
   categories: string[];
-  readStatus: 'all-read' | 'some-read' | 'in-progress' | 'unread';
-  hasSeries: boolean;
   seriesCount: number;
   latestAddedOn: string | null;
   lastReadTime: string | null;
-  readingProgress: number;
+  readCount: number;
+  inProgressCount: number;
   avgPersonalRating: number | null;
+}
+
+export interface AuthorPageResponse {
+  content: AuthorSummary[];
+  totalElements: number;
+}
+
+export interface EnrichedAuthor extends AuthorSummary {
+  readStatus: 'all-read' | 'some-read' | 'in-progress' | 'unread';
+  hasSeries: boolean;
+  readingProgress: number;
+}
+
+// Purely derived from counts the backend already computed - no Book[] input, so no
+// per-request cost beyond the one paginated authors call.
+export function enrichAuthor(author: AuthorSummary): EnrichedAuthor {
+  const totalBooks = author.bookCount;
+  let readStatus: EnrichedAuthor['readStatus'] = 'unread';
+  if (totalBooks > 0) {
+    if (author.readCount === totalBooks) {
+      readStatus = 'all-read';
+    } else if (author.inProgressCount > 0) {
+      readStatus = 'in-progress';
+    } else if (author.readCount > 0) {
+      readStatus = 'some-read';
+    }
+  }
+
+  return {
+    ...author,
+    readStatus,
+    hasSeries: author.seriesCount > 0,
+    readingProgress: totalBooks > 0 ? Math.round((author.readCount / totalBooks) * 100) : 0,
+  };
 }
 
 export interface AuthorFilters {

@@ -366,6 +366,43 @@ class FileServiceTest {
                 );
             }
         }
+
+        @Nested
+        @DisplayName("listAuthorIdsWithPhotos")
+        class ListAuthorIdsWithPhotosTests {
+
+            @Test
+            void oneReaddirFindsEveryAuthorFolder_noPerAuthorStatNeeded() throws IOException {
+                Path authorImages = tempDir.resolve("author-images");
+                Files.createDirectories(authorImages.resolve("1"));
+                Files.createDirectories(authorImages.resolve("2"));
+                Files.createDirectories(authorImages.resolve("42"));
+
+                assertEquals(Set.of(1L, 2L, 42L), fileService.listAuthorIdsWithPhotos());
+            }
+
+            @Test
+            void missingRootDirectory_returnsEmptySet() {
+                assertEquals(Set.of(), fileService.listAuthorIdsWithPhotos());
+            }
+
+            @Test
+            void ignoresNonNumericAndFileEntries() throws IOException {
+                Path authorImages = tempDir.resolve("author-images");
+                Files.createDirectories(authorImages.resolve("7"));
+                Files.createDirectories(authorImages);
+                Files.writeString(authorImages.resolve("not-a-folder.txt"), "stray file");
+
+                assertEquals(Set.of(7L), fileService.listAuthorIdsWithPhotos());
+            }
+
+            @Test
+            void emptyRootDirectory_returnsEmptySet() throws IOException {
+                Files.createDirectories(tempDir.resolve("author-images"));
+
+                assertEquals(Set.of(), fileService.listAuthorIdsWithPhotos());
+            }
+        }
     }
 
     @Nested
