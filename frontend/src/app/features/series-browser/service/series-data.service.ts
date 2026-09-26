@@ -1,14 +1,11 @@
 import {computed, inject, Injectable} from '@angular/core';
-import {HttpClient} from '@angular/common/http';
+import {HttpClient, HttpParams} from '@angular/common/http';
 import {lastValueFrom, Observable} from 'rxjs';
 import {map, takeUntil} from 'rxjs/operators';
 import {infiniteQueryOptions, injectQuery} from '@tanstack/angular-query-experimental';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {AuthService} from '../../../shared/service/auth.service';
 import {ReadStatus} from '../../book/model/book.model';
-import {BookQueryService} from '../../book/data/book-query.service';
-import {GLOBAL_FACETS_PARAMS} from '../../book/data/book-query-params';
-import {toFacetDistinctCount} from '../../book/data/book-query.models';
 import {SeriesCoverBook, SeriesSummary} from '../model/series.model';
 import {BrowseLink, BrowsePage, BrowsePageMetadata, findBrowsePageLink} from '../../../core/data/browse.models';
 import {mapBrowsePage} from '../../../core/data/browse-response';
@@ -51,7 +48,6 @@ export class SeriesDataService {
 
   private readonly http = inject(HttpClient);
   private readonly authService = inject(AuthService);
-  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
   private readonly url = `${API_CONFIG.BASE_URL}/api/v1/books/series/summary`;
 
@@ -69,13 +65,21 @@ export class SeriesDataService {
     });
   }
 
-  // Sidebar badge count from the server's series facet group, not the full 132k-book collection.
-  private readonly globalFacetsQuery = injectQuery(() => ({
-    ...this.bookQueryService.facets(GLOBAL_FACETS_PARAMS),
+  // Sidebar badge count from the summary endpoint's cached aggregate totalElements, not the
+  // series facet - that facet caps at 100 distinct values and freezes the badge past that.
+  private readonly seriesCountQuery = injectQuery(() => ({
+    queryKey: ['books', 'series', 'summary', 'count'] as const,
+    queryFn: ({signal}: {signal: AbortSignal}) => lastValueFrom(this.http.get<RawSeriesPage>(this.url, {
+      params: new HttpParams().set('page', '0').set('size', '1'),
+    }).pipe(
+      map(raw => raw.page.totalElements),
+      takeUntil(abortSignal(signal)),
+    )),
     enabled: !!this.token(),
+    ...QUERY_DEFAULTS,
   }));
 
-  readonly totalSeriesCount = computed(() => toFacetDistinctCount(this.globalFacetsQuery.data(), 'series'));
+  readonly totalSeriesCount = computed(() => this.seriesCountQuery.data() ?? 0);
 
   private fetchPage(params: SeriesQueryParams, nextHref: string | null, signal: AbortSignal): Promise<SeriesPage> {
     const request$: Observable<RawSeriesPage> = nextHref !== null

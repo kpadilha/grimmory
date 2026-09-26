@@ -135,6 +135,8 @@ export class LibraryService {
     return this.libraries().find(library => library.id === id);
   }
 
+  // ponytail: capped at 100 distinct libraries (BookFacetService.MAX_VALUES) - a homelab
+  // won't hit that; raise the cap or add a dedicated count if it ever does.
   readonly bookCountByLibraryId = computed(() => toFacetNumericCountMap(this.globalFacetsQuery.data(), 'library'));
 
   getBookCountsByFormat(libraryId: number): Observable<Record<string, number>> {

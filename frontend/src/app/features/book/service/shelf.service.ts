@@ -106,6 +106,8 @@ export class ShelfService {
     return this.http.get<Book[]>(`${this.url}/${shelfId}/books`);
   }
 
+  // ponytail: capped at 100 distinct shelves (BookFacetService.MAX_VALUES) - a homelab
+  // won't hit that; raise the cap or add a dedicated count if it ever does.
   readonly bookCountByShelfId = computed(() => toFacetNumericCountMap(this.globalFacetsQuery.data(), 'shelf'));
 
   readonly unshelvedBookCount = computed(() =>

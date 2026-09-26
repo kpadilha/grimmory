@@ -39,9 +39,10 @@ describe('SeriesDataService', () => {
     const httpTestingController = TestBed.inject(HttpTestingController);
     flushSignalAndQueryEffects();
 
-    // SeriesDataService also runs the sidebar's series-count facet query eagerly - not this
-    // test's concern, but it must be drained for httpTestingController.verify() to pass.
-    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets')).flush({facets: []});
+    // SeriesDataService also runs the sidebar's series-count query eagerly - not this test's
+    // concern, but it must be drained for httpTestingController.verify() to pass.
+    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/series/summary') && req.params.get('size') === '1')
+      .flush({content: [], page: {number: 0, size: 1, totalElements: 0, totalPages: 0, cursor: null}, links: []});
 
     const firstRequest = httpTestingController.expectOne(
       req => req.url.endsWith('/api/v1/books/series/summary') && req.params.get('page') === '0',
@@ -117,26 +118,25 @@ describe('SeriesDataService', () => {
     httpTestingController.verify();
   });
 
-  it('derives the sidebar series count from the series facet, never the full collection', async () => {
+  it('derives the sidebar series count from the summary totalElements, uncapped unlike the facet', async () => {
     TestBed.configureTestingModule({providers: seriesDataServiceProviders()});
 
     const service = TestBed.inject(SeriesDataService);
     const httpTestingController = TestBed.inject(HttpTestingController);
     flushSignalAndQueryEffects();
 
-    const facetsRequest = httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets'));
-    facetsRequest.flush({
-      facets: [{
-        metadata: {rel: 'facet', key: 'series', title: 'Series'},
-        links: [
-          {rel: ['facet'], href: '', type: 'application/json', value: 'Alpha', title: 'Alpha', properties: {numberOfItems: 2}},
-          {rel: ['facet'], href: '', type: 'application/json', value: 'Beta', title: 'Beta', properties: {numberOfItems: 1}},
-        ],
-      }],
+    const countRequest = httpTestingController.expectOne(
+      req => req.url.endsWith('/api/v1/books/series/summary') && req.params.get('size') === '1',
+    );
+    expect(countRequest.request.params.get('page')).toBe('0');
+    countRequest.flush({
+      content: [],
+      page: {number: 0, size: 1, totalElements: 132, totalPages: 132, cursor: null},
+      links: [],
     });
     await flushQueryAsync();
 
-    expect(service.totalSeriesCount()).toBe(2);
+    expect(service.totalSeriesCount()).toBe(132);
     httpTestingController.verify();
   });
 });
