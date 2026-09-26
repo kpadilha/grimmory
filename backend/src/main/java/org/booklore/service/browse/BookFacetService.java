@@ -136,8 +136,10 @@ public class BookFacetService {
             String preserved = BrowseParams.preserved(facet, facetLogicParam, query);
             List<FacetGroup> groups = new ArrayList<>();
             groups.add(sortGroup(preserved));
+            // Resolved once so every facet group (and the phonetic fallback decision) shares it.
+            Specification<BookEntity> search = filterSpecifications.search(query, facets, facetLogic, userId, isAdmin, libraryIds);
             for (FacetDef def : FACETS) {
-                Specification<BookEntity> base = filterSpecifications.base(query, facets, facetLogic, userId, isAdmin, libraryIds, def.key());
+                Specification<BookEntity> base = filterSpecifications.withSearch(search, facets, facetLogic, userId, isAdmin, libraryIds, def.key());
                 List<FacetCount> counts = count(def, base, userId);
                 if ("file_type".equals(def.key())) {
                     counts = Stream.concat(counts.stream(), count(PHYSICAL_FILE_TYPE, base, userId).stream())

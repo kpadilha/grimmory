@@ -13,6 +13,11 @@ import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.CategoryEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.model.entity.TagEntity;
+import org.booklore.model.dto.request.AuthorUpdateRequest;
+import org.booklore.service.AuthorMetadataService;
+import org.booklore.service.metadata.MetadataManagementService;
+import org.booklore.model.enums.MergeMetadataType;
 import org.booklore.model.entity.UserBookProgressEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.ReadStatus;
@@ -69,6 +74,12 @@ class BookBrowseRegistryTest {
     private BookSortRegistry sortRegistry;
     @Autowired
     private BookFacetRegistry facetRegistry;
+    @Autowired
+    private AuthorMetadataService authorMetadataService;
+    @Autowired
+    private BookSearchResolver searchResolver;
+    @Autowired
+    private MetadataManagementService metadataManagementService;
 
     @PersistenceContext
     private EntityManager em;
@@ -292,19 +303,221 @@ class BookBrowseRegistryTest {
     // ---- query ----
 
     @Test
-    void queryMatchesTitleAuthorAndIsbn() {
-        Long byTitle = book("The Hobbit", null, null, Instant.now(), List.of(), List.of(), null).getId();
+    void queryMatchesSubstringsAnywhereInAnyField() {
+        Long title = book("The Black Wall of Jerusalem", null, null, Instant.now(), List.of(), List.of(), null).getId();
+        Long ugly = book("Confessions of an Ugly Stepsister", null, null, Instant.now(), List.of(), List.of(), null).getId();
         Long byAuthor = book("Unrelated", null, null, Instant.now(), List.of(), List.of("J.R.R. Tolkien"), null).getId();
+        Long byCategory = book("Other", null, null, Instant.now(), List.of("Space Opera"), List.of(), null).getId();
         Long byIsbn = book("Another", null, null, Instant.now(), List.of(), List.of(), "9780261103344").getId();
         em.flush();
 
-        assertThat(matchIds("hobbit")).containsExactlyInAnyOrder(byTitle);
-        assertThat(matchIds("tolkien")).containsExactlyInAnyOrder(byAuthor);
-        assertThat(matchIds("9780261103344")).containsExactlyInAnyOrder(byIsbn);
+        assertThat(matchIds("salem")).containsExactlyInAnyOrder(title);
+        assertThat(matchIds("gly")).containsExactlyInAnyOrder(ugly);
+        assertThat(matchIds("TOLKIEN")).containsExactlyInAnyOrder(byAuthor);
+        assertThat(matchIds("opera")).containsExactlyInAnyOrder(byCategory);
+        assertThat(matchIds("261103")).containsExactlyInAnyOrder(byIsbn);
+    }
+
+    @Test
+    void everyWordMustMatchInAnyOrderAcrossFields() {
+        Long wanted = book("Space Carrier Avalon", null, null, Instant.now(), List.of(), List.of("Glynn Stewart"), null).getId();
+        book("Space Carrier", null, null, Instant.now(), List.of(), List.of("Someone Else"), null);
+        em.flush();
+
+        assertThat(matchIds("avalon space")).containsExactlyInAnyOrder(wanted);
+        assertThat(matchIds("stewart carrier")).containsExactlyInAnyOrder(wanted);
+    }
+
+    @Test
+    void misspelledAuthorMatchesPhoneticallyOnlyWhenNothingMatchesExactly() {
+        Long stewart = book("Space Carrier Avalon", null, null, Instant.now(), List.of(), List.of("Glynn Stewart"), null).getId();
+        Long stuart = book("Other Book", null, null, Instant.now(), List.of(), List.of("Stuart Hill"), null).getId();
+        em.flush();
+
+        assertThat(matchIds("Glynn Stuart")).containsExactlyInAnyOrder(stewart);
+        // "stuart" matches a book as a substring, so the phonetic fallback stays off.
+        assertThat(matchIds("stuart")).containsExactlyInAnyOrder(stuart);
+    }
+
+    @Test
+    void backslashInTheQueryIsLiteral() {
+        Long backslash = book("100\\ Proof", null, null, Instant.now(), List.of(), List.of(), null).getId();
+        book("Nothing Here", null, null, Instant.now(), List.of(), List.of(), null);
+        em.flush();
+
+        assertThat(matchIds("0\\ p")).containsExactlyInAnyOrder(backslash);
+    }
+
+    // ---- search text maintenance ----
+
+    @Test
+    void addingAnAuthorToTheCollectionAloneRefreshesSearchText() {
+        BookEntity book = book("Plain Title");
+        em.flush();
+        em.clear();
+
+        BookMetadataEntity metadata = em.find(BookMetadataEntity.class, book.getId());
+        metadata.getAuthors().add(author("Glynn Stewart"));
+        metadata.getTags().add(tag("as Glynnis Kincaid"));
+        em.flush();
+        em.clear();
+
+        BookMetadataEntity reloaded = em.find(BookMetadataEntity.class, book.getId());
+        assertThat(reloaded.getSearchText()).isEqualTo("plain title glynn stewart as glynnis kincaid");
+        assertThat(reloaded.getSearchPhonetic()).isEqualTo(" G450 S363 ");
+    }
+
+    @Test
+    void editingAFieldKeepsUnloadedAuthorsInSearchText() {
+        BookEntity book = book("Old Title", null, null, Instant.now(), List.of(), List.of("Glynn Stewart"), null);
+        em.flush();
+        em.clear();
+
+        em.find(BookMetadataEntity.class, book.getId()).setTitle("New Title");
+        em.flush();
+        em.clear();
+
+        assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText()).isEqualTo("new title glynn stewart");
+    }
+
+    @Test
+    void renamingAnAuthorRefreshesTheirBooks() {
+        BookEntity book = book("Title", null, null, Instant.now(), List.of(), List.of("Glyn Stewrt"), null);
+        em.flush();
+        em.clear();
+
+        AuthorUpdateRequest rename = new AuthorUpdateRequest();
+        rename.setName("Glynn Stewart");
+        authorMetadataService.updateAuthor(authors.get("Glyn Stewrt").getId(), rename);
+        em.flush();
+        em.clear();
+
+        assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText()).isEqualTo("title glynn stewart");
+    }
+
+    @Test
+    void flywayBackfillWritesWhatTheEntityWriterWrites() throws Exception {
+        BookEntity book = book("Space Carrier Avalon", "Avalon", null, Instant.now(), List.of("Space Opera"), List.of("Glynn Stewart"), "9781988035009");
+        book.getMetadata().getTags().add(tag("as Glynnis Kincaid"));
+        em.flush();
+        BookMetadataEntity written = em.find(BookMetadataEntity.class, book.getId());
+        String expectedText = written.getSearchText();
+        String expectedPhonetic = written.getSearchPhonetic();
+        em.createNativeQuery("UPDATE book_metadata_search SET search_text = 'stale', search_phonetic = NULL").executeUpdate();
+        em.createNativeQuery("DELETE FROM book_metadata_search WHERE book_id <> " + book.getId()).executeUpdate();
+
+        em.unwrap(org.hibernate.Session.class).doWork(connection -> {
+            org.flywaydb.core.api.migration.Context context = org.mockito.Mockito.mock(org.flywaydb.core.api.migration.Context.class);
+            org.mockito.Mockito.when(context.getConnection()).thenReturn(connection);
+            new db.migration.V149_5__Refresh_search_text().migrate(context);
+        });
+        em.clear();
+
+        BookMetadataEntity refreshed = em.find(BookMetadataEntity.class, book.getId());
+        assertThat(expectedText).isEqualTo("space carrier avalon avalon glynn stewart space opera as glynnis kincaid 9781988035009");
+        assertThat(refreshed.getSearchText()).isEqualTo(expectedText);
+        assertThat(refreshed.getSearchPhonetic()).isEqualTo(expectedPhonetic);
+    }
+
+    @Test
+    void consolidatingIntoARenamedTargetRefreshesItsBooks() {
+        // Dotless "ı" upper-cases to "I", so the ignore-case lookup finds the existing names, yet
+        // the normalised search text changes: the rename must reach every book carrying them.
+        BookEntity book = book("Title", null, null, Instant.now(), List.of("Kincaid Genre"), List.of("Glynn Kincaid"), null);
+        book.getMetadata().getTags().add(tag("as Glynnis Kincaid"));
+        em.flush();
+        em.clear();
+
+        metadataManagementService.consolidateMetadata(MergeMetadataType.authors, List.of("Glynn Kıncaid"), List.of());
+        metadataManagementService.consolidateMetadata(MergeMetadataType.categories, List.of("Kıncaid Genre"), List.of());
+        metadataManagementService.consolidateMetadata(MergeMetadataType.tags, List.of("as Glynnis Kıncaid"), List.of());
+        em.flush();
+        em.clear();
+
+        assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText())
+                .isEqualTo("title glynn kıncaid kıncaid genre as glynnis kıncaid");
+    }
+
+    @Test
+    void caseOnlyRenameLeavesBooksUnloaded() {
+        BookEntity book = book("Title", null, null, Instant.now(), List.of("Space Opera"), List.of("Glynn Stewart"), null);
+        book.getMetadata().getTags().add(tag("as Glynnis Kincaid"));
+        em.flush();
+        Long authorId = authors.get("Glynn Stewart").getId();
+        Long categoryId = categories.get("Space Opera").getId();
+        Long tagId = book.getMetadata().getTags().iterator().next().getId();
+        em.clear();
+
+        AuthorEntity author = em.find(AuthorEntity.class, authorId);
+        CategoryEntity category = em.find(CategoryEntity.class, categoryId);
+        TagEntity tag = em.find(TagEntity.class, tagId);
+        author.rename("GLYNN STEWART");
+        category.rename("space opera");
+        tag.rename("As Glynnis Kincaid");
+
+        assertThat(org.hibernate.Hibernate.isInitialized(author.getBookMetadataEntityList())).isFalse();
+        assertThat(org.hibernate.Hibernate.isInitialized(category.getBookMetadataEntityList())).isFalse();
+        assertThat(org.hibernate.Hibernate.isInitialized(tag.getBookMetadataEntityList())).isFalse();
+        em.flush();
+        em.clear();
+        assertThat(em.find(BookMetadataEntity.class, book.getId()).getSearchText()).isEqualTo("title glynn stewart space opera as glynnis kincaid");
+    }
+
+    // ---- selectivity ----
+
+    @Test
+    void matchesUpToTheLimitDriveTheQueryFromTheirIds() {
+        int n = BookSearchResolver.SELECTIVE_MATCH_LIMIT;
+        seedMatchingBooks(n);
+        Specification<BookEntity> search = searchResolver.resolve("zqxmatch", (root, q, cb) -> cb.conjunction());
+        assertThat(bookRepository.count(search)).isEqualTo(n);
+
+        // An id-driven search keeps the ids measured before the text changed.
+        em.createNativeQuery("UPDATE book_metadata_search SET search_text = 'gone' WHERE book_id = 1000001").executeUpdate();
+        assertThat(bookRepository.count(search)).isEqualTo(n);
+    }
+
+    @Test
+    void matchesOverTheLimitKeepTheLikePlan() {
+        int n = BookSearchResolver.SELECTIVE_MATCH_LIMIT + 1;
+        seedMatchingBooks(n);
+        Specification<BookEntity> search = searchResolver.resolve("zqxmatch", (root, q, cb) -> cb.conjunction());
+        assertThat(bookRepository.count(search)).isEqualTo(n);
+
+        // A LIKE-driven search re-reads the text.
+        em.createNativeQuery("UPDATE book_metadata_search SET search_text = 'gone' WHERE book_id = 1000001").executeUpdate();
+        assertThat(bookRepository.count(search)).isEqualTo(n - 1);
+    }
+
+    @Test
+    void selectiveFallbackStillDecidesOnTheScope() {
+        BookEntity stewart = book("Space Carrier Avalon", null, null, Instant.now(), List.of(), List.of("Glynn Stewart"), null);
+        BookEntity hidden = book("Glynn Stuart Hidden", null, null, Instant.now(), List.of(), List.of(), null);
+        em.flush();
+        Specification<BookEntity> scope = (root, q, cb) -> cb.notEqual(root.get("id"), hidden.getId());
+
+        assertThat(bookRepository.findAll(searchResolver.resolve("Glynn Stuart", scope).and(scope)))
+                .extracting(BookEntity::getId).containsExactly(stewart.getId());
+        assertThat(bookRepository.findAll(searchResolver.resolve("Glynn Stuart", (root, q, cb) -> cb.conjunction())))
+                .extracting(BookEntity::getId).containsExactly(hidden.getId());
+    }
+
+    private void seedMatchingBooks(int n) {
+        em.flush();
+        String range = " FROM SYSTEM_RANGE(1000001, " + (1000000 + n) + ")";
+        em.createNativeQuery("INSERT INTO book (id, library_id, deleted, is_physical) SELECT X, " + library.getId() + ", FALSE, FALSE" + range).executeUpdate();
+        em.createNativeQuery("INSERT INTO book_metadata (book_id, title) SELECT X, 'Zqxmatch'" + range).executeUpdate();
+        em.createNativeQuery("INSERT INTO book_metadata_search (book_id, search_text) SELECT X, 'zqxmatch'" + range).executeUpdate();
+    }
+
+    private TagEntity tag(String name) {
+        TagEntity tag = TagEntity.builder().name(name).build();
+        em.persist(tag);
+        return tag;
     }
 
     private Set<Long> matchIds(String query) {
-        return bookRepository.findAll(BookSearchSpecification.matching(query)).stream()
+        return bookRepository.findAll(searchResolver.resolve(query, (root, q, cb) -> cb.conjunction())).stream()
                 .map(BookEntity::getId).collect(Collectors.toSet());
     }
 }

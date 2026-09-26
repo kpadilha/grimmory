@@ -29,14 +29,6 @@ final class BookOpdsSpecifications {
         };
     }
 
-    static Specification<BookEntity> metadataSearch(String text) {
-        String pattern = "%" + text + "%";
-        return (root, query, cb) -> {
-            Join<BookEntity, BookMetadataEntity> m = root.join("metadata", JoinType.LEFT);
-            return cb.like(m.get("searchText"), pattern);
-        };
-    }
-
     static Specification<BookEntity> hasAuthorName(String authorName) {
         return (root, query, cb) -> {
             Join<BookEntity, BookMetadataEntity> m = root.join("metadata", JoinType.INNER);

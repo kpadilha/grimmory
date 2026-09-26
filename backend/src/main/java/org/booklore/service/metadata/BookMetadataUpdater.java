@@ -280,10 +280,8 @@ public class BookMetadataUpdater {
                     e.getAuthors().add(author);
                 }
             }
-            e.updateSearchText();
         } else if (replaceMode == MetadataReplaceMode.REPLACE_MISSING && authors.isEmpty()) {
             authors.addAll(newAuthors);
-            e.updateSearchText();
         } else if (replaceMode == null) {
             if (!merge) e.getAuthors().clear();
             for (AuthorEntity author : newAuthors) {
@@ -291,7 +289,6 @@ public class BookMetadataUpdater {
                     e.getAuthors().add(author);
                 }
             }
-            e.updateSearchText();
         }
     }
 

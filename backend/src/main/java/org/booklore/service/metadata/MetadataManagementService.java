@@ -97,7 +97,7 @@ public class MetadataManagementService {
         List<AuthorEntity> targetAuthors = targetValues.stream()
                 .map(name -> authorRepository.findByNameIgnoreCase(name)
                         .map(existing -> {
-                            existing.setName(name);
+                            existing.rename(name);
                             return authorRepository.save(existing);
                         })
                         .orElseGet(() -> {
@@ -119,7 +119,6 @@ public class MetadataManagementService {
             for (BookMetadataEntity metadata : booksWithOldAuthor) {
                 metadata.getAuthors().remove(oldAuthor);
                 metadata.getAuthors().addAll(targetAuthors);
-                metadata.updateSearchText();
             }
 
             bookMetadataRepository.saveAll(booksWithOldAuthor);
@@ -135,7 +134,7 @@ public class MetadataManagementService {
         List<CategoryEntity> targetCategories = targetValues.stream()
                 .map(name -> categoryRepository.findByNameIgnoreCase(name)
                         .map(existing -> {
-                            existing.setName(name);
+                            existing.rename(name);
                             return categoryRepository.save(existing);
                         })
                         .orElseGet(() -> {
@@ -210,7 +209,7 @@ public class MetadataManagementService {
         List<TagEntity> targetTags = targetValues.stream()
                 .map(name -> tagRepository.findByNameIgnoreCase(name)
                         .map(existing -> {
-                            existing.setName(name);
+                            existing.rename(name);
                             return tagRepository.save(existing);
                         })
                         .orElseGet(() -> {

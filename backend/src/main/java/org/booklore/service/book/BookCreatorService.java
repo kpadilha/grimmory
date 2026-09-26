@@ -148,7 +148,6 @@ public class BookCreatorService {
                 .map(authorName -> authorRepository.findByName(authorName)
                         .orElseGet(() -> authorRepository.save(AuthorEntity.builder().name(authorName).build())))
                 .forEach(authorEntity -> bookEntity.getMetadata().getAuthors().add(authorEntity));
-        bookEntity.getMetadata().updateSearchText(); // Manually trigger search text update since collection modification doesn't trigger @PreUpdate
     }
 
     public void addMoodsToBook(Set<String> moods, BookEntity bookEntity) {

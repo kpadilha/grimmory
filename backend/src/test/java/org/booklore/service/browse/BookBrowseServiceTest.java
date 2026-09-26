@@ -11,6 +11,7 @@ import org.booklore.config.security.service.AuthenticationService;
 import org.booklore.model.dto.Book;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
+import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookLoreUserEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -179,6 +180,33 @@ class BookBrowseServiceTest {
         BrowsePage<Book> result = browse(null, List.of("genre:Horror"), null, null, 0, 20);
         assertThat(result.content().stream().map(Book::getId)).containsExactly(horror);
         assertThat(result.page().totalElements()).isEqualTo(1);
+    }
+
+    @Test
+    void phoneticFallbackIsDecidedOnTheCallersVisibleBooksOnly() {
+        LibraryEntity hidden = LibraryEntity.builder().name("Hidden").icon("book").watch(false)
+                .formatPriority(List.of(BookFileType.EPUB)).build();
+        em.persist(hidden);
+        LibraryPathEntity hiddenPath = LibraryPathEntity.builder().library(hidden).path("/h").build();
+        em.persist(hiddenPath);
+        withAuthor(book("Glynn Stuart Hidden", List.of()), null).setLibrary(hidden);
+        withAuthor(book("Glynn Stuart Deleted", List.of()), null).setDeleted(true);
+        Long visible = withAuthor(book("Space Carrier Avalon", List.of()), "Glynn Stewart").getId();
+        em.flush();
+
+        // Only invisible books contain "glynn stuart", so for this caller nothing matches exactly.
+        BrowsePage<Book> page = browse(null, null, "Glynn Stuart", null, 0, 20);
+        assertThat(page.content().stream().map(Book::getId)).containsExactly(visible);
+        assertThat(page.page().totalElements()).isEqualTo(1);
+    }
+
+    private BookEntity withAuthor(BookEntity book, String authorName) {
+        if (authorName != null) {
+            AuthorEntity author = AuthorEntity.builder().name(authorName).build();
+            em.persist(author);
+            book.getMetadata().getAuthors().add(author);
+        }
+        return book;
     }
 
     @Test
