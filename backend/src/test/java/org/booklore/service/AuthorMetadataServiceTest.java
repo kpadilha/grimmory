@@ -280,7 +280,7 @@ class AuthorMetadataServiceTest {
     void getAllAuthors_paginatesInsteadOfLoadingTheWholeTable() {
         Pageable pageable = PageRequest.of(2, 50);
         AuthorEntity author = authorEntity(1L, "Author One", null);
-        when(authorRepository.findAllWithBookCount(pageable)).thenReturn(List.of(new Object[]{author, 3L}));
+        when(authorRepository.findAllWithBookCount(pageable)).thenReturn(Collections.singletonList(new Object[]{author, 3L}));
         when(authorRepository.countAllAuthors()).thenReturn(48_620L);
         stubEmptyEnrichment(Set.of(1L));
         when(fileService.listAuthorIdsWithPhotos()).thenReturn(Set.of());
@@ -340,25 +340,33 @@ class AuthorMetadataServiceTest {
     void getAllAuthors_aggregatesEnrichmentInBulkScopedToThePageAuthorIds() {
         Pageable pageable = PageRequest.of(0, 50);
         AuthorEntity author = authorEntity(5L, "Brandon Sanderson", null);
-        when(authorRepository.findAllWithBookCount(pageable)).thenReturn(List.of(new Object[]{author, 4L}));
+        when(authorRepository.findAllWithBookCount(pageable)).thenReturn(Collections.singletonList(new Object[]{author, 4L}));
         when(authorRepository.countAllAuthors()).thenReturn(1L);
         when(fileService.listAuthorIdsWithPhotos()).thenReturn(Set.of());
 
         Set<Long> pageIds = Set.of(5L);
-        when(authorRepository.findLibraryNamesForAuthors(pageIds)).thenReturn(List.of(
+        // Rows are built before any when(...) starts, not nested inside thenReturn(): a mock
+        // stubbed while an outer stubbing is pending throws UnfinishedStubbingException.
+        List<AuthorRepository.AuthorLibraryRow> libraryRows = List.of(
                 libraryRow(5L, "Main"), libraryRow(5L, "Main"), libraryRow(5L, "Archive")
-        ));
-        when(authorRepository.findCategoriesForAuthors(pageIds)).thenReturn(List.of(categoryRow(5L, "Fantasy")));
-        when(authorRepository.findSeriesNamesForAuthors(pageIds)).thenReturn(List.of(
+        );
+        List<AuthorRepository.AuthorCategoryRow> categoryRows = List.of(categoryRow(5L, "Fantasy"));
+        List<AuthorRepository.AuthorSeriesRow> seriesRows = List.of(
                 seriesRow(5L, "Mistborn"), seriesRow(5L, "mistborn")
-        ));
+        );
         Instant older = Instant.parse("2025-01-01T00:00:00Z");
         Instant newer = Instant.parse("2026-01-01T00:00:00Z");
-        when(authorRepository.findAddedOnForAuthors(pageIds)).thenReturn(List.of(addedOnRow(5L, older), addedOnRow(5L, newer)));
-        when(authorRepository.findProgressForAuthors(pageIds, 1L)).thenReturn(List.of(
+        List<AuthorRepository.AuthorAddedOnRow> addedOnRows = List.of(addedOnRow(5L, older), addedOnRow(5L, newer));
+        List<AuthorRepository.AuthorProgressRow> progressRows = List.of(
                 progressRow(5L, ReadStatus.READ, null, 5),
                 progressRow(5L, ReadStatus.READING, newer, 3)
-        ));
+        );
+
+        when(authorRepository.findLibraryNamesForAuthors(pageIds)).thenReturn(libraryRows);
+        when(authorRepository.findCategoriesForAuthors(pageIds)).thenReturn(categoryRows);
+        when(authorRepository.findSeriesNamesForAuthors(pageIds)).thenReturn(seriesRows);
+        when(authorRepository.findAddedOnForAuthors(pageIds)).thenReturn(addedOnRows);
+        when(authorRepository.findProgressForAuthors(pageIds, 1L)).thenReturn(progressRows);
 
         AuthorSummary summary = service.getAllAuthors(pageable).getContent().get(0);
 
@@ -390,16 +398,24 @@ class AuthorMetadataServiceTest {
         AuthorEntity author = authorEntity(5L, "Brandon Sanderson", null);
         Set<Long> libraryIds = Set.of(9L);
         Set<Long> pageIds = Set.of(5L);
-        when(authorRepository.findAllWithBookCountByLibraryIds(libraryIds, pageable)).thenReturn(List.of(new Object[]{author, 1L}));
+        when(authorRepository.findAllWithBookCountByLibraryIds(libraryIds, pageable)).thenReturn(Collections.singletonList(new Object[]{author, 1L}));
         when(authorRepository.countAllAuthorsByLibraryIds(libraryIds)).thenReturn(1L);
         when(fileService.listAuthorIdsWithPhotos()).thenReturn(Set.of());
 
-        when(authorRepository.findLibraryNamesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(List.of(libraryRow(5L, "Main")));
-        when(authorRepository.findCategoriesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(List.of(categoryRow(5L, "Fantasy")));
-        when(authorRepository.findSeriesNamesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(List.of(seriesRow(5L, "Mistborn")));
+        // Rows are built before any when(...) starts, not nested inside thenReturn(): a mock
+        // stubbed while an outer stubbing is pending throws UnfinishedStubbingException.
+        List<AuthorRepository.AuthorLibraryRow> libraryRows = List.of(libraryRow(5L, "Main"));
+        List<AuthorRepository.AuthorCategoryRow> categoryRows = List.of(categoryRow(5L, "Fantasy"));
+        List<AuthorRepository.AuthorSeriesRow> seriesRows = List.of(seriesRow(5L, "Mistborn"));
         Instant addedOn = Instant.parse("2025-01-01T00:00:00Z");
-        when(authorRepository.findAddedOnForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(List.of(addedOnRow(5L, addedOn)));
-        when(authorRepository.findProgressForAuthorsByLibraryIds(pageIds, 2L, libraryIds)).thenReturn(List.of(progressRow(5L, ReadStatus.READ, addedOn, 5)));
+        List<AuthorRepository.AuthorAddedOnRow> addedOnRows = List.of(addedOnRow(5L, addedOn));
+        List<AuthorRepository.AuthorProgressRow> progressRows = List.of(progressRow(5L, ReadStatus.READ, addedOn, 5));
+
+        when(authorRepository.findLibraryNamesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(libraryRows);
+        when(authorRepository.findCategoriesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(categoryRows);
+        when(authorRepository.findSeriesNamesForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(seriesRows);
+        when(authorRepository.findAddedOnForAuthorsByLibraryIds(pageIds, libraryIds)).thenReturn(addedOnRows);
+        when(authorRepository.findProgressForAuthorsByLibraryIds(pageIds, 2L, libraryIds)).thenReturn(progressRows);
 
         AuthorSummary summary = service.getAllAuthors(pageable).getContent().get(0);
 

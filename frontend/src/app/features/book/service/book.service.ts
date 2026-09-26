@@ -28,6 +28,7 @@ import {
 import {BookQueryService} from '../data/book-query.service';
 import {DEFAULT_BOOK_SORT_TERMS, GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
 import {bookSummaryToBook, toFacetTotalCount} from '../data/book-query.models';
+import {MetadataValuesService} from '../../metadata/component/metadata-manager/metadata-values.service';
 
 @Injectable({
   providedIn: 'root',
@@ -45,14 +46,8 @@ export class BookService {
   private queryClient = inject(QueryClient);
   private readonly t = inject(TranslocoService);
   private readonly bookQueryService = inject(BookQueryService);
+  private readonly metadataValuesService = inject(MetadataValuesService);
   private readonly token = this.authService.token;
-
-  private booksQuery = injectQuery(() => ({
-    ...this.getBooksQueryOptions(),
-    enabled: !!this.token(),
-  }));
-
-  books = computed(() => this.booksQuery.data() ?? []);
 
   // Boot-time "all books" total from the server's shelf_status facet counts, not the full 132k-book collection.
   private readonly globalFacetsQuery = injectQuery(() => ({
@@ -62,47 +57,29 @@ export class BookService {
 
   readonly totalBookCount = computed(() => toFacetTotalCount(this.globalFacetsQuery.data(), 'shelf_status'));
 
-  /** Pre-computed unique metadata values for autocomplete across the app. */
+  private static readonly UNIQUE_METADATA_FACET_KEYS = ['author', 'genre', 'mood', 'tag', 'publisher', 'series'] as const;
+
+  // Autocomplete values across the whole collection, from the uncapped facets/values aggregate -
+  // never a client scan of every book.
+  private readonly uniqueMetadataQuery = injectQuery(() => ({
+    queryKey: ['books', 'facets', 'values', 'unique-metadata'] as const,
+    queryFn: () => this.metadataValuesService.fetch(BookService.UNIQUE_METADATA_FACET_KEYS),
+    enabled: !!this.token(),
+    staleTime: 5 * 60_000,
+  }));
+
   readonly uniqueMetadata = computed(() => {
-    const books = this.books();
-    const authors = new Set<string>();
-    const categories = new Set<string>();
-    const moods = new Set<string>();
-    const tags = new Set<string>();
-    const publishers = new Set<string>();
-    const series = new Set<string>();
-
-    for (const book of books) {
-      const m = book.metadata;
-      if (!m) continue;
-      m.authors?.forEach(v => authors.add(v));
-      m.categories?.forEach(v => categories.add(v));
-      m.moods?.forEach(v => moods.add(v));
-      m.tags?.forEach(v => tags.add(v));
-      if (m.publisher) publishers.add(m.publisher);
-      if (m.seriesName) series.add(m.seriesName);
-    }
-
+    const data = this.uniqueMetadataQuery.data();
+    const values = (key: string) => (data?.[key] ?? []).map(row => row.value);
     return {
-      authors: Array.from(authors),
-      categories: Array.from(categories),
-      moods: Array.from(moods),
-      tags: Array.from(tags),
-      publishers: Array.from(publishers),
-      series: Array.from(series),
+      authors: values('author'),
+      categories: values('genre'),
+      moods: values('mood'),
+      tags: values('tag'),
+      publishers: values('publisher'),
+      series: values('series'),
     };
   });
-
-  booksError = computed<string | null>(() => {
-    if (!this.token() || !this.booksQuery.isError()) {
-      return null;
-    }
-
-    const error = this.booksQuery.error();
-    return error instanceof Error ? error.message : 'Failed to load books';
-  });
-
-  isBooksLoading = computed(() => !!this.token() && this.booksQuery.isPending());
 
   constructor() {
     effect(() => {
@@ -110,14 +87,6 @@ export class BookService {
       if (token === null) {
         this.queryClient.removeQueries({queryKey: BOOKS_QUERY_KEY});
       }
-    });
-  }
-
-  private getBooksQueryOptions() {
-    return queryOptions({
-      queryKey: BOOKS_QUERY_KEY,
-      queryFn: () => lastValueFrom(this.http.get<Book[]>(this.url, {params: {stripForListView: false}})),
-      staleTime: 5 * 60_000,
     });
   }
 
@@ -171,14 +140,13 @@ export class BookService {
 
   /*------------------ Book Retrieval ------------------*/
 
-  findBookById(bookId: number): Book | undefined {
-    return this.books().find(book => +book.id === +bookId);
-  }
-
-  getBooksByIds(bookIds: number[]): Book[] {
-    if (bookIds.length === 0) return [];
-    const idSet = new Set(bookIds.map(id => +id));
-    return this.books().filter(book => idSet.has(+book.id));
+  // /books/batch fetches only the requested ids - a selection editor must never wait on the
+  // full collection just to resolve the few books it was opened with.
+  getBooksByIds(bookIds: number[]): Promise<Book[]> {
+    if (bookIds.length === 0) return Promise.resolve([]);
+    const ids = new Set(bookIds.map(id => +id));
+    const params = new HttpParams().set('ids', Array.from(ids).join(','));
+    return lastValueFrom(this.http.get<Book[]>(`${this.url}/batch`, {params}));
   }
 
   // Server-scoped by the book's own series (facet=series:<name>) - never the full collection
@@ -277,13 +245,6 @@ export class BookService {
   /*------------------ Reading & Viewer Settings ------------------*/
 
   readBook(bookId: number, reader?: 'epub-streaming', explicitBookType?: BookType): void {
-    const book = this.findBookById(bookId);
-
-    if (book) {
-      this.navigateToReader(book, bookId, reader, explicitBookType);
-      return;
-    }
-
     this.ensureBookDetail(bookId, false).then(detail => {
       this.navigateToReader(detail, bookId, reader, explicitBookType);
     }).catch(() => {

@@ -69,6 +69,10 @@ export class DashboardBookService {
     })),
   }));
 
+  // True while any enabled scroller's first page is still in flight - the dashboard spinner
+  // gate, replacing the old wait on the full-collection query.
+  readonly isLoading = computed(() => this.scrollerQueries().some(result => result.isPending()));
+
   /**
    * Computed map of scroller ID to its server-paged book list.
    * This centralizes all dashboard filtering logic and keeps it reactive.

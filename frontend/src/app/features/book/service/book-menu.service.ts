@@ -328,28 +328,29 @@ export class BookMenuService {
              rejectLabel: this.t.translate('common.no'),
              accept: () => {
                const loader = this.loadingService.show(this.t.translate('book.menuService.loading.removingFromShelves', {count}));
-               const books = this.bookService.getBooksByIds(Array.from(selectedBooks));
-               const allShelfIds = new Set<number>();
-               books.forEach(b => b.shelves?.forEach(s => {
-                 if (s.id) allShelfIds.add(s.id);
-               }));
+               this.bookService.getBooksByIds(Array.from(selectedBooks)).then(books => {
+                 const allShelfIds = new Set<number>();
+                 books.forEach(b => b.shelves?.forEach(s => {
+                   if (s.id) allShelfIds.add(s.id);
+                 }));
 
-               if (allShelfIds.size === 0) {
-                 this.loadingService.hide(loader);
-                 this.messageService.add({ severity: 'info', summary: this.t.translate('common.info'), detail: this.t.translate('book.menuService.toast.noBooksOnShelvesDetail') });
-                 return;
-               }
+                 if (allShelfIds.size === 0) {
+                   this.loadingService.hide(loader);
+                   this.messageService.add({ severity: 'info', summary: this.t.translate('common.info'), detail: this.t.translate('book.menuService.toast.noBooksOnShelvesDetail') });
+                   return;
+                 }
 
-               this.bookService.updateBookShelves(selectedBooks, new Set(), allShelfIds)
-                 .pipe(finalize(() => this.loadingService.hide(loader)))
-                 .subscribe({
-                   next: () => {
-                     this.messageService.add({severity: 'success', summary: this.t.translate('common.success'), detail: this.t.translate('book.menuService.toast.unshelveSuccessDetail')});
-                   },
-                   error: () => {
-                     this.messageService.add({severity: 'error', summary: this.t.translate('common.error'), detail: this.t.translate('book.menuService.toast.unshelveFailedDetail')});
-                   }
-                 });
+                 this.bookService.updateBookShelves(selectedBooks, new Set(), allShelfIds)
+                   .pipe(finalize(() => this.loadingService.hide(loader)))
+                   .subscribe({
+                     next: () => {
+                       this.messageService.add({severity: 'success', summary: this.t.translate('common.success'), detail: this.t.translate('book.menuService.toast.unshelveSuccessDetail')});
+                     },
+                     error: () => {
+                       this.messageService.add({severity: 'error', summary: this.t.translate('common.error'), detail: this.t.translate('book.menuService.toast.unshelveFailedDetail')});
+                     }
+                   });
+               });
              }
            });
          }

@@ -1,4 +1,3 @@
-import {signal} from '@angular/core';
 import {TestBed} from '@angular/core/testing';
 import {TranslocoService} from '@jsverse/transloco';
 import {MessageService} from '@openng/optimus-ui/api';
@@ -6,7 +5,8 @@ import {ActivatedRoute, convertToParamMap, Router} from '@angular/router';
 import {Subject, of, throwError} from 'rxjs';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
-import {BookService} from '../../../book/service/book.service';
+import {createQueryClientHarness} from '../../../../core/testing/query-testing';
+import {BookQueryService} from '../../../book/data/book-query.service';
 import {BookCardOverlayPreferenceService} from '../../../book/components/legacy-book-card/book-card-overlay-preference.service';
 import {CoverScalePreferenceService} from '../../../../shared/service/cover-scale-preference.service';
 import {UserService} from '../../../settings/user-management/user.service';
@@ -67,8 +67,12 @@ describe('AuthorDetailComponent', () => {
       },
     };
 
+    const queryHarness = createQueryClientHarness();
+
     TestBed.configureTestingModule({
       providers: [
+        ...queryHarness.providers,
+        BookQueryService,
         {
           provide: ActivatedRoute,
           useValue: route,
@@ -84,12 +88,6 @@ describe('AuthorDetailComponent', () => {
             getAuthorPhotoUrl,
             patchAuthorInCache,
             quickMatchAuthor,
-          },
-        },
-        {
-          provide: BookService,
-          useValue: {
-            books: signal([]),
           },
         },
         {
