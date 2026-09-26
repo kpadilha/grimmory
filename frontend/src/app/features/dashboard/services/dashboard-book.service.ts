@@ -12,13 +12,15 @@ import {
   isBookQuerySortKey,
 } from '../../book/data/book-query-params';
 import {bookSummaryToBook} from '../../book/data/book-query.models';
+import {BOOK_FILE_TYPES} from '../../book/data/book-response.models';
 import {MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
 import {DEFAULT_MAX_ITEMS, ScrollerConfig, ScrollerType} from '../models/dashboard-config.model';
 import {DashboardConfigService} from './dashboard-config.service';
 
-// LAST_READ/LAST_LISTENED candidates: readStatus and lastReadTime live on one UserBookProgress
-// row per book (shared by ebook and audiobook activity), so the server can't filter by format.
-// Overfetch a bounded candidate page and split by format client-side below.
+// LAST_READ/LAST_LISTENED each add a file_type facet so the server, not a client-side split,
+// separates ebook from audiobook activity - a shared query dominated by one format used to push
+// the other format's genuinely-recent books outside the candidate window.
+const EBOOK_FILE_TYPES = BOOK_FILE_TYPES.filter(type => type !== 'AUDIOBOOK');
 const RECENT_ACTIVITY_CANDIDATE_MULTIPLIER = 5;
 const RECENT_ACTIVITY_CANDIDATE_CAP = 200;
 const RECENT_ACTIVITY_STATUSES = [ReadStatus.READING, ReadStatus.RE_READING, ReadStatus.PAUSED];
@@ -104,10 +106,17 @@ export class DashboardBookService {
         return {facets: EMPTY_FACET_SELECTION, facetLogic: 'and', sort: [{key: 'addedOn', direction: 'desc'}], size};
 
       case ScrollerType.LAST_READ:
+        return {
+          facets: {read_status: RECENT_ACTIVITY_STATUSES, file_type: [...EBOOK_FILE_TYPES]},
+          facetLogic: 'or',
+          sort: [{key: 'lastReadTime', direction: 'desc'}],
+          size: Math.min(size * RECENT_ACTIVITY_CANDIDATE_MULTIPLIER, RECENT_ACTIVITY_CANDIDATE_CAP),
+        };
+
       case ScrollerType.LAST_LISTENED:
         return {
-          facets: {read_status: RECENT_ACTIVITY_STATUSES},
-          facetLogic: 'and',
+          facets: {read_status: RECENT_ACTIVITY_STATUSES, file_type: ['AUDIOBOOK']},
+          facetLogic: 'or',
           sort: [{key: 'lastReadTime', direction: 'desc'}],
           size: Math.min(size * RECENT_ACTIVITY_CANDIDATE_MULTIPLIER, RECENT_ACTIVITY_CANDIDATE_CAP),
         };
