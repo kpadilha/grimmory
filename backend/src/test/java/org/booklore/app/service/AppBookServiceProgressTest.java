@@ -1,6 +1,7 @@
 package org.booklore.app.service;
 
 import jakarta.persistence.EntityManager;
+import org.booklore.service.browse.BookSearchResolver;
 import org.booklore.app.dto.UpdateProgressRequest;
 import org.booklore.app.mapper.AppBookMapper;
 import org.booklore.config.security.service.AuthenticationService;
@@ -59,7 +60,7 @@ class AppBookServiceProgressTest {
         service = new AppBookService(
                 bookRepository, userBookProgressRepository, userBookFileProgressRepository,
                 shelfRepository, authenticationService, mobileBookMapper,
-                bookService, magicShelfBookService, entityManager
+                bookService, magicShelfBookService, entityManager, mock(BookSearchResolver.class)
         );
     }
 

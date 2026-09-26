@@ -136,7 +136,6 @@ public class PhysicalBookService {
                 .map(authorName -> authorRepository.findByName(authorName)
                         .orElseGet(() -> authorRepository.save(AuthorEntity.builder().name(authorName).build())))
                 .forEach(authorEntity -> bookEntity.getMetadata().getAuthors().add(authorEntity));
-        bookEntity.getMetadata().updateSearchText();
     }
 
     private void addCategoriesToBook(Set<String> categories, BookEntity bookEntity) {

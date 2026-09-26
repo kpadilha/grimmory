@@ -146,14 +146,6 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT b FROM BookEntity b WHERE (b.deleted IS NULL OR b.deleted = false) AND b.id > :afterId ORDER BY b.id")
     List<BookEntity> findBooksForMigrationBatch(@Param("afterId") long afterId, Pageable pageable);
 
-    @Query("""
-                SELECT DISTINCT b FROM BookEntity b
-                LEFT JOIN FETCH b.metadata m
-                LEFT JOIN FETCH m.authors
-                WHERE b.id IN :bookIds
-            """)
-    List<BookEntity> findBooksWithMetadataAndAuthors(@Param("bookIds") List<Long> bookIds);
-
     @Modifying
     @Transactional
     @Query("DELETE FROM BookEntity b WHERE b.deleted IS TRUE")

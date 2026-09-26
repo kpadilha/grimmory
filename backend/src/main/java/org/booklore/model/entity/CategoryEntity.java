@@ -2,6 +2,7 @@ package org.booklore.model.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.booklore.util.BookUtils;
 import org.hibernate.Hibernate;
 import org.hibernate.annotations.BatchSize;
 
@@ -29,6 +30,16 @@ public class CategoryEntity {
     @BatchSize(size = 20)
     @Builder.Default
     private Set<BookMetadataEntity> bookMetadataEntityList = new HashSet<>();
+
+    /** Renames; books are refreshed only when their normalised search text can change. */
+    public void rename(String newName) {
+        if (Objects.equals(name, newName)) return;
+        boolean searchTextChanges = !Objects.equals(BookUtils.normalizeForSearch(name), BookUtils.normalizeForSearch(newName));
+        this.name = newName;
+        if (searchTextChanges) {
+            bookMetadataEntityList.forEach(BookMetadataEntity::updateSearchText);
+        }
+    }
 
     @Override
     public final boolean equals(Object o) {

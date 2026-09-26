@@ -402,7 +402,7 @@ public class AuthorMetadataService {
                 .orElseThrow(() -> ApiError.AUTHOR_NOT_FOUND.createException(authorId));
 
         if (request.getName() != null) {
-            author.setName(request.getName());
+            author.rename(request.getName());
         }
         if (request.getDescription() != null) {
             author.setDescription(request.getDescription().isBlank() ? null : request.getDescription());
