@@ -1,14 +1,63 @@
-import {describe, it} from 'vitest';
+import {signal} from '@angular/core';
+import {TestBed} from '@angular/core/testing';
+import {of} from 'rxjs';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
-// NOTE(frontend-seam): Real coverage here needs seams around year-count aggregation, trend-line
-// dataset generation, and translated tooltip callbacks so publication-trend analysis can be
-// asserted without relying on Chart.js metadata internals.
-describe.skip('PublicationTrendChartComponent', () => {
-  it('needs aggregation seams to verify year extraction, contiguous year-range filling, and trend insights', () => {
-    // TODO(seam): Cover calculateYearCounts and calculateInsights once the computed chart output is isolated behind a deterministic adapter.
+import {TranslocoService} from '@jsverse/transloco';
+import {LibraryFilterService} from '../../service/library-filter.service';
+import {LibraryStatsService, type LibraryTimelineResponse} from '../../service/library-stats.service';
+import {PublicationTrendChartComponent} from './publication-trend-chart.component';
+
+describe('PublicationTrendChartComponent', () => {
+  const selectedLibrary = signal<number | null>(null);
+  let timeline: ReturnType<typeof vi.fn>;
+
+  const emptyTimeline: LibraryTimelineResponse = {buckets: [], oldest: null, newest: null, avgDaysToFinish: null};
+
+  beforeEach(() => {
+    selectedLibrary.set(null);
+    timeline = vi.fn(() => of(emptyTimeline));
+
+    TestBed.configureTestingModule({
+      providers: [
+        {provide: LibraryStatsService, useValue: {timeline}},
+        {provide: LibraryFilterService, useValue: {selectedLibrary}},
+        {provide: TranslocoService, useValue: {translate: (key: string) => key}},
+      ],
+    });
   });
 
-  it('needs callback seams to verify translated tooltip output and line-dataset shaping across sparse publication years', () => {
-    // TODO(seam): Cover chartData and chartOptions after extracting Chart.js callback metadata from the component runtime.
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    vi.restoreAllMocks();
+  });
+
+  it('requests the published_date/year timeline scoped to the selected library', async () => {
+    selectedLibrary.set(2);
+
+    TestBed.runInInjectionContext(() => new PublicationTrendChartComponent());
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(timeline).toHaveBeenCalledWith('published_date', 'year', 2);
+  });
+
+  it('fills sparse years into a contiguous line dataset from server year/count pairs', async () => {
+    timeline.mockReturnValue(of({
+      buckets: [
+        {period: '2018', count: 1},
+        {period: '2020', count: 3},
+      ],
+      oldest: null,
+      newest: null,
+      avgDaysToFinish: null,
+    } as LibraryTimelineResponse));
+
+    const component = TestBed.runInInjectionContext(() => new PublicationTrendChartComponent());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const chartData = component.chartData();
+
+    expect(component.totalBooks()).toBe(4);
+    expect(chartData.labels).toEqual(['2018', '2019', '2020']);
+    expect(chartData.datasets[0]?.data).toEqual([1, 0, 3]);
   });
 });

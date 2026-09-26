@@ -1,10 +1,11 @@
 import {Component, computed, inject} from '@angular/core';
+import {toObservable, toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {ChartConfiguration, ChartData, ScatterDataPoint} from 'chart.js';
-import {BookService} from '../../../../../book/service/book.service';
+import {catchError, of, switchMap} from 'rxjs';
 import {LibraryFilterService} from '../../../library-stats/service/library-filter.service';
-import {Book} from '../../../../../book/model/book.model';
+import {LibraryStatsService, type LibraryRatedBook} from '../../../library-stats/service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 interface TasteQuadrant {
@@ -40,16 +41,16 @@ interface RatingTasteMetrics {
   styleUrls: ['./rating-taste-chart.component.scss']
 })
 export class RatingTasteChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly t = inject(TranslocoService);
-  private readonly metrics = computed<RatingTasteMetrics>(() => {
-    if (this.bookService.isBooksLoading()) {
-      return this.emptyMetrics();
-    }
-
-    return this.calculateMetrics(this.bookService.books(), this.libraryFilterService.selectedLibrary());
-  });
+  private readonly ratedBooks = toSignal(
+    toObservable(this.libraryFilterService.selectedLibrary).pipe(
+      switchMap(libraryId => this.libraryStatsService.ratedBooks(libraryId).pipe(catchError(() => of([] as LibraryRatedBook[]))))
+    ),
+    {initialValue: [] as LibraryRatedBook[]}
+  );
+  private readonly metrics = computed<RatingTasteMetrics>(() => this.calculateMetrics(this.ratedBooks()));
 
   public readonly chartType = 'scatter' as const;
   public readonly quadrants = computed(() => this.metrics().quadrants);
@@ -162,13 +163,10 @@ export class RatingTasteChartComponent {
 
   public readonly chartData = computed(() => this.metrics().chartData);
 
-  private calculateMetrics(books: Book[], selectedLibraryId: string | number | null): RatingTasteMetrics {
-    if (books.length === 0) {
-      return this.emptyMetrics();
-    }
-
-    const filteredBooks = this.filterBooksByLibrary(books, selectedLibraryId);
-    const ratedBooks = this.getBooksWithBothRatings(filteredBooks);
+  // externalRatingAvg already comes pre-averaged from the rated-books endpoint (mirrors this
+  // component's old getExternalRating() fallback chain, minus the generic metadata.rating fallback).
+  private calculateMetrics(ratedBooksResponse: LibraryRatedBook[]): RatingTasteMetrics {
+    const ratedBooks = ratedBooksResponse.filter(b => b.externalRatingAvg != null && b.externalRatingAvg > 0);
 
     if (ratedBooks.length === 0) {
       return this.emptyMetrics();
@@ -187,38 +185,7 @@ export class RatingTasteChartComponent {
     };
   }
 
-  private filterBooksByLibrary(books: Book[], selectedLibraryId: string | number | null): Book[] {
-    return selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
-  }
-
-  private getBooksWithBothRatings(books: Book[]): Book[] {
-    return books.filter(book => {
-      const hasPersonalRating = book.personalRating && book.personalRating > 0;
-      const hasExternalRating = this.getExternalRating(book) > 0;
-      return hasPersonalRating && hasExternalRating;
-    });
-  }
-
-  private getExternalRating(book: Book): number {
-    const ratings: number[] = [];
-
-    if (book.metadata?.goodreadsRating) ratings.push(book.metadata.goodreadsRating);
-    if (book.metadata?.amazonRating) ratings.push(book.metadata.amazonRating);
-    if (book.metadata?.hardcoverRating) ratings.push(book.metadata.hardcoverRating);
-    if (book.metadata?.lubimyczytacRating) ratings.push(book.metadata.lubimyczytacRating);
-    if (book.metadata?.ranobedbRating) ratings.push(book.metadata.ranobedbRating);
-
-    if (ratings.length > 0) {
-      return ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length;
-    }
-
-    if (book.metadata?.rating) return book.metadata.rating;
-    return 0;
-  }
-
-  private categorizeBooks(books: Book[]): Map<string, BookDataPoint[]> {
+  private categorizeBooks(books: LibraryRatedBook[]): Map<string, BookDataPoint[]> {
     const categories = new Map<string, BookDataPoint[]>([
       [this.t.translate('statsUser.ratingTaste.quadrantHiddenGems'), []],
       [this.t.translate('statsUser.ratingTaste.quadrantPopularFavorites'), []],
@@ -227,11 +194,11 @@ export class RatingTasteChartComponent {
     ]);
 
     books.forEach(book => {
-      const personalRating = book.personalRating!;
+      const personalRating = book.personalRating;
       // Normalize personal rating from 1-10 to 1-5 scale for comparison
       const personalRatingNormalized = personalRating / 2;
-      const externalRating = this.getExternalRating(book);
-      const bookTitle = book.metadata?.title || book.fileName || 'Unknown';
+      const externalRating = book.externalRatingAvg!;
+      const bookTitle = book.title || 'Unknown';
 
       // Use normalized rating (3 is midpoint on 1-5 scale) for quadrant calculation
       let quadrant: string;

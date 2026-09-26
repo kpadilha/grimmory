@@ -1,9 +1,10 @@
 import {Component, computed, inject} from '@angular/core';
+import {toObservable, toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData} from 'chart.js';
+import {catchError, of, switchMap} from 'rxjs';
 import {LibraryFilterService} from '../../service/library-filter.service';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book} from '../../../../../book/model/book.model';
+import {LibraryStatsService} from '../../service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 interface FormatStats {
@@ -31,20 +32,28 @@ const FORMAT_COLORS: Record<string, string> = {
   styleUrls: ['./book-formats-chart.component.scss']
 })
 export class BookFormatsChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly t = inject(TranslocoService);
-  private readonly filteredBooks = computed(() => {
-    if (this.bookService.isBooksLoading()) {
-      return [];
-    }
-
-    return this.filterBooksByLibrary(this.bookService.books(), this.libraryFilterService.selectedLibrary());
-  });
+  private readonly buckets = toSignal(
+    toObservable(this.libraryFilterService.selectedLibrary).pipe(
+      switchMap(libraryId => this.libraryStatsService.aggregate('file_type', libraryId).pipe(catchError(() => of([]))))
+    ),
+    {initialValue: []}
+  );
 
   public readonly chartType = 'pie' as const;
-  public readonly formatStats = computed(() => this.calculateFormatStats(this.filteredBooks()));
-  public readonly totalBooks = computed(() => this.filteredBooks().length);
+  public readonly formatStats = computed<FormatStats[]>(() => {
+    const buckets = this.buckets();
+    const total = buckets.reduce((sum, b) => sum + b.count, 0);
+    if (total === 0) {
+      return [];
+    }
+    return buckets
+      .map(b => ({format: b.value, count: b.count, percentage: (b.count / total) * 100}))
+      .sort((a, b) => b.count - a.count);
+  });
+  public readonly totalBooks = computed(() => this.formatStats().reduce((sum, s) => sum + s.count, 0));
 
   public readonly chartOptions: ChartConfiguration<'pie'>['options'] = {
     responsive: true,
@@ -105,27 +114,4 @@ export class BookFormatsChartComponent {
     };
   });
 
-  private filterBooksByLibrary(books: Book[], selectedLibraryId: number | null): Book[] {
-    return selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
-  }
-
-  private calculateFormatStats(books: Book[]): FormatStats[] {
-    const formatCounts = new Map<string, number>();
-
-    books.forEach(book => {
-      const format = book.primaryFile?.bookType || 'Unknown';
-      formatCounts.set(format, (formatCounts.get(format) || 0) + 1);
-    });
-
-    const total = books.length;
-    return Array.from(formatCounts.entries())
-      .map(([format, count]) => ({
-        format,
-        count,
-        percentage: (count / total) * 100
-      }))
-      .sort((a, b) => b.count - a.count);
-  }
 }

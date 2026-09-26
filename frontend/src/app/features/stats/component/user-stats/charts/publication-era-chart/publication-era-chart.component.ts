@@ -1,9 +1,10 @@
-import {Component, effect, inject} from '@angular/core';
+import {Component, DestroyRef, inject} from '@angular/core';
+import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {ChartConfiguration, ChartData} from 'chart.js';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book} from '../../../../../book/model/book.model';
+import {catchError, EMPTY} from 'rxjs';
+import {LibraryStatsService, type LibraryRatedBook} from '../../../library-stats/service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 @Component({
@@ -14,15 +15,15 @@ import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
   styleUrls: ['./publication-era-chart.component.scss']
 })
 export class PublicationEraChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly t = inject(TranslocoService);
-  private readonly syncChartEffect = effect(() => {
-    if (this.bookService.isBooksLoading()) {
-      return;
-    }
+  private readonly destroyRef = inject(DestroyRef);
 
-    this.processData(this.bookService.books());
-  });
+  constructor() {
+    this.libraryStatsService.ratedBooks(null)
+      .pipe(catchError(() => EMPTY), takeUntilDestroyed(this.destroyRef))
+      .subscribe(books => this.processData(books));
+  }
 
   public readonly chartType = 'line' as const;
   public hasData = false;
@@ -71,7 +72,7 @@ export class PublicationEraChartComponent {
     interaction: {mode: 'index', intersect: false}
   };
 
-  private processData(books: Book[]): void {
+  private processData(books: LibraryRatedBook[]): void {
     if (books.length === 0) {
       this.hasData = false;
       this.bestDecade = '';
@@ -81,7 +82,7 @@ export class PublicationEraChartComponent {
       return;
     }
 
-    const ratedBooks = books.filter(b => b.metadata?.publishedDate && b.personalRating && b.personalRating > 0);
+    const ratedBooks = books.filter(b => b.publishedYear != null && b.personalRating > 0);
     if (ratedBooks.length < 3) return;
 
     this.totalRated = ratedBooks.length;
@@ -91,10 +92,10 @@ export class PublicationEraChartComponent {
     const ratingLabels = ['1-2', '3-4', '5-6', '7-8', '9-10'];
 
     for (const book of ratedBooks) {
-      const pubYear = new Date(book.metadata!.publishedDate!).getFullYear();
+      const pubYear = book.publishedYear!;
       if (pubYear < 1900 || pubYear > 2030) continue;
       const decade = `${Math.floor(pubYear / 10) * 10}s`;
-      const rating = book.personalRating!;
+      const rating = book.personalRating;
       const bucket = Math.min(4, Math.floor((rating - 1) / 2));
 
       if (!decadeData.has(decade)) decadeData.set(decade, new Map());

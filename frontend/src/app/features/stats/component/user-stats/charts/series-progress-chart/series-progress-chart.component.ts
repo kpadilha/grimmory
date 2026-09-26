@@ -1,11 +1,11 @@
-import {Component, effect, inject} from '@angular/core';
+import {Component, DestroyRef, inject} from '@angular/core';
+import {takeUntilDestroyed, toObservable} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
-import {BehaviorSubject, Observable} from 'rxjs';
+import {BehaviorSubject, catchError, EMPTY, Observable, switchMap} from 'rxjs';
 import {ChartConfiguration, ChartData} from 'chart.js';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../../../book/model/book.model';
 import {LibraryFilterService} from '../../../library-stats/service/library-filter.service';
+import {LibraryStatsService, type LibrarySeriesStat} from '../../../library-stats/service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {AsyncPipe} from '@angular/common';
 
@@ -48,16 +48,10 @@ type SeriesChartData = ChartData<'bar', number[], string>;
   styleUrls: ['./series-progress-chart.component.scss']
 })
 export class SeriesProgressChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly t = inject(TranslocoService);
-  private readonly syncChartEffect = effect(() => {
-    if (this.bookService.isBooksLoading()) {
-      return;
-    }
-
-    this.calculateAndUpdateChart(this.bookService.books(), this.libraryFilterService.selectedLibrary());
-  });
+  private readonly destroyRef = inject(DestroyRef);
 
   public readonly chartType = 'bar' as const;
   public seriesList: SeriesInfo[] = [];
@@ -170,6 +164,15 @@ export class SeriesProgressChartComponent {
 
   public readonly chartData$: Observable<SeriesChartData> = this.chartDataSubject.asObservable();
 
+  constructor() {
+    toObservable(this.libraryFilterService.selectedLibrary)
+      .pipe(
+        switchMap(libraryId => this.libraryStatsService.series(200, libraryId).pipe(catchError(() => EMPTY))),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe(stats => this.calculateAndUpdateChart(stats));
+  }
+
   onSearchInput(event: Event): void {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) {
@@ -278,19 +281,8 @@ export class SeriesProgressChartComponent {
     this.updateChartData();
   }
 
-  private calculateAndUpdateChart(books: Book[], selectedLibraryId: number | null): void {
-    if (books.length === 0) {
-      this.chartDataSubject.next({labels: [], datasets: []});
-      this.seriesList = [];
-      this.displayedSeries = [];
-      this.stats = null;
-      return;
-    }
-
-    const filteredBooks = this.filterBooksByLibrary(books, selectedLibraryId);
-    const seriesBooks = this.getBooksInSeries(filteredBooks);
-
-    if (seriesBooks.length === 0) {
+  private calculateAndUpdateChart(serverStats: LibrarySeriesStat[]): void {
+    if (serverStats.length === 0) {
       this.chartDataSubject.next({labels: [], datasets: []});
       this.seriesList = [];
       this.filteredSeriesList = [];
@@ -300,114 +292,22 @@ export class SeriesProgressChartComponent {
       return;
     }
 
-    this.seriesList = this.calculateSeriesInfo(seriesBooks);
+    this.seriesList = this.toSeriesInfo(serverStats);
     this.stats = this.calculateSeriesStats(this.seriesList);
     this.currentPage = 0;
     this.applyFiltersAndSort();
   }
 
-  private filterBooksByLibrary(books: Book[], selectedLibraryId: string | number | null): Book[] {
-    return selectedLibraryId
-      ? books.filter(book => book.libraryId === selectedLibraryId)
-      : books;
-  }
-
-  private getBooksInSeries(books: Book[]): Book[] {
-    return books.filter(book => book.metadata?.seriesName);
-  }
-
-  private calculateSeriesInfo(books: Book[]): SeriesInfo[] {
-    const seriesMap = new Map<string, Book[]>();
-
-    books.forEach(book => {
-      const seriesName = book.metadata!.seriesName!;
-      if (!seriesMap.has(seriesName)) {
-        seriesMap.set(seriesName, []);
-      }
-      seriesMap.get(seriesName)!.push(book);
-    });
-
-    const seriesInfoList: SeriesInfo[] = [];
-
-    seriesMap.forEach((seriesBooks, seriesName) => {
-      const booksOwned = seriesBooks.length;
-      let booksRead = 0;
-      let booksReading = 0;
-      let booksPartiallyRead = 0;
-      let booksPaused = 0;
-      let booksAbandoned = 0;
-      let booksWontRead = 0;
-      let booksUnread = 0;
-      let totalRating = 0;
-      let ratedCount = 0;
-      let totalExternalRating = 0;
-      let externalRatedCount = 0;
-      let totalInSeries: number | null = null;
-      let nextUnread: string | null = null;
-
-      // Sort by series number for finding next unread
-      const sortedBooks = [...seriesBooks].sort((a, b) => {
-        const numA = a.metadata?.seriesNumber || 999;
-        const numB = b.metadata?.seriesNumber || 999;
-        return numA - numB;
-      });
-
-      sortedBooks.forEach(book => {
-        // Track series total
-        if (book.metadata?.seriesTotal && (!totalInSeries || book.metadata.seriesTotal > totalInSeries)) {
-          totalInSeries = book.metadata.seriesTotal;
-        }
-
-        // Count by status - handle ALL ReadStatus values
-        switch (book.readStatus) {
-          case ReadStatus.READ:
-            booksRead++;
-            break;
-          case ReadStatus.READING:
-          case ReadStatus.RE_READING:
-            booksReading++;
-            break;
-          case ReadStatus.PARTIALLY_READ:
-            booksPartiallyRead++;
-            if (!nextUnread) {
-              nextUnread = book.metadata?.title || book.fileName || null;
-            }
-            break;
-          case ReadStatus.PAUSED:
-            booksPaused++;
-            if (!nextUnread) {
-              nextUnread = book.metadata?.title || book.fileName || null;
-            }
-            break;
-          case ReadStatus.ABANDONED:
-            booksAbandoned++;
-            break;
-          case ReadStatus.WONT_READ:
-            booksWontRead++;
-            break;
-          case ReadStatus.UNREAD:
-          case ReadStatus.UNSET:
-          default:
-            booksUnread++;
-            if (!nextUnread) {
-              nextUnread = book.metadata?.title || book.fileName || null;
-            }
-            break;
-        }
-
-        // Personal rating
-        if (book.personalRating && book.personalRating > 0) {
-          totalRating += book.personalRating;
-          ratedCount++;
-        }
-
-        // External rating
-        const extRating = this.getExternalRating(book);
-        if (extRating > 0) {
-          totalExternalRating += extRating;
-          externalRatedCount++;
-        }
-      });
+  private toSeriesInfo(serverStats: LibrarySeriesStat[]): SeriesInfo[] {
+    const seriesInfoList: SeriesInfo[] = serverStats.map(s => {
+      const booksOwned = s.bookCount;
+      const booksRead = s.readCount;
+      const booksReading = s.readingCount;
+      const booksPartiallyRead = s.partiallyReadCount;
+      const booksPaused = s.pausedCount;
+      const booksAbandoned = s.abandonedCount;
+      const booksWontRead = s.wontReadCount;
+      const booksUnread = s.unreadCount;
 
       // Calculate completion percentage based on what we own (excluding won't read/abandoned)
       const relevantBooks = booksOwned - booksWontRead - booksAbandoned;
@@ -429,8 +329,8 @@ export class SeriesProgressChartComponent {
         status = 'not-started';
       }
 
-      seriesInfoList.push({
-        name: seriesName,
+      return {
+        name: s.seriesName,
         booksOwned,
         booksRead,
         booksReading,
@@ -439,13 +339,13 @@ export class SeriesProgressChartComponent {
         booksAbandoned,
         booksWontRead,
         booksUnread,
-        totalInSeries,
+        totalInSeries: s.seriesTotal,
         completionPercentage,
-        avgPersonalRating: ratedCount > 0 ? totalRating / ratedCount : null,
-        avgExternalRating: externalRatedCount > 0 ? totalExternalRating / externalRatedCount : null,
-        nextUnread,
+        avgPersonalRating: s.avgPersonalRating,
+        avgExternalRating: s.avgExternalRating,
+        nextUnread: s.nextUnreadTitle,
         status
-      });
+      };
     });
 
     // Sort by: in-progress first, then by completion %, then by books owned
@@ -458,18 +358,6 @@ export class SeriesProgressChartComponent {
       // Then by books owned (more books = more interesting)
       return b.booksOwned - a.booksOwned;
     });
-  }
-
-  private getExternalRating(book: Book): number {
-    const ratings: number[] = [];
-    if (book.metadata?.goodreadsRating) ratings.push(book.metadata.goodreadsRating);
-    if (book.metadata?.amazonRating) ratings.push(book.metadata.amazonRating);
-    if (book.metadata?.hardcoverRating) ratings.push(book.metadata.hardcoverRating);
-
-    if (ratings.length > 0) {
-      return ratings.reduce((sum, r) => sum + r, 0) / ratings.length;
-    }
-    return 0;
   }
 
   private calculateSeriesStats(seriesList: SeriesInfo[]): SeriesStats {

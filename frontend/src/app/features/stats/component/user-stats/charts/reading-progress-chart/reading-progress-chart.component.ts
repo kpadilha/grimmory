@@ -1,10 +1,11 @@
 import {Component, computed, inject} from '@angular/core';
+import {toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {ChartConfiguration, ChartData} from 'chart.js';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book} from '../../../../../book/model/book.model';
+import {UserStatsService} from '../../../../../settings/user-management/user-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
+import {catchError, of} from 'rxjs';
 
 interface ReadingProgressStats {
   progressRange: string;
@@ -32,6 +33,12 @@ const PROGRESS_RANGES = [
 
 type ProgressChartData = ChartData<'doughnut', number[], string>;
 
+// Reproduces the fixed axis labels ('0%', '1-25%', ...) from the server bucket's min/max.
+function formatProgressRange(min: number, max: number): string {
+  if (min === max) return `${min}%`;
+  return `${min}-${max}%`;
+}
+
 @Component({
   selector: 'app-reading-progress-chart',
   standalone: true,
@@ -40,14 +47,24 @@ type ProgressChartData = ChartData<'doughnut', number[], string>;
   styleUrls: ['./reading-progress-chart.component.scss']
 })
 export class ReadingProgressChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly userStatsService = inject(UserStatsService);
   private readonly t = inject(TranslocoService);
-  private readonly progressStats = computed(() => {
-    if (this.bookService.isBooksLoading()) {
+  private readonly distributions = toSignal(
+    this.userStatsService.getBookDistributions().pipe(catchError(() => of(undefined))),
+    {initialValue: undefined}
+  );
+  private readonly progressStats = computed<ReadingProgressStats[]>(() => {
+    const data = this.distributions();
+    if (!data) {
       return [];
     }
 
-    return this.calculateReadingProgressStats(this.bookService.books());
+    // Server buckets arrive in the same fixed order as PROGRESS_RANGES.
+    return data.progressDistribution.map((bucket, i) => ({
+      progressRange: formatProgressRange(bucket.min, bucket.max),
+      count: bucket.count,
+      description: PROGRESS_RANGES[i]?.desc ?? bucket.range
+    }));
   });
 
   public readonly chartType = 'doughnut' as const;
@@ -153,42 +170,4 @@ export class ReadingProgressChartComponent {
     }
   });
 
-  private calculateReadingProgressStats(books: Book[]): ReadingProgressStats[] {
-    if (books.length === 0) {
-      return [];
-    }
-
-    return this.processReadingProgressStats(books);
-  }
-
-  private processReadingProgressStats(books: Book[]): ReadingProgressStats[] {
-    const rangeCounts = new Map<string, number>();
-    PROGRESS_RANGES.forEach(range => rangeCounts.set(range.range, 0));
-
-    for (const book of books) {
-      const progress = this.getBookProgress(book);
-
-      for (const range of PROGRESS_RANGES) {
-        if (progress >= range.min && progress <= range.max) {
-          rangeCounts.set(range.range, (rangeCounts.get(range.range) || 0) + 1);
-          break;
-        }
-      }
-    }
-
-    return PROGRESS_RANGES.map(range => ({
-      progressRange: range.range,
-      count: rangeCounts.get(range.range) || 0,
-      description: range.desc
-    }));
-  }
-
-  private getBookProgress(book: Book): number {
-    if (book.pdfProgress?.percentage) return book.pdfProgress.percentage;
-    if (book.epubProgress?.percentage) return book.epubProgress.percentage;
-    if (book.cbxProgress?.percentage) return book.cbxProgress.percentage;
-    if (book.koreaderProgress?.percentage) return book.koreaderProgress.percentage;
-    if (book.koboProgress?.percentage) return book.koboProgress.percentage;
-    return 0;
-  }
 }

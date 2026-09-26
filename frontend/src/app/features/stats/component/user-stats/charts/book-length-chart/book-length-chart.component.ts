@@ -1,9 +1,11 @@
 import {Component, computed, inject} from '@angular/core';
+import {toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {ChartConfiguration, ChartData, ScatterDataPoint} from 'chart.js';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../../../book/model/book.model';
+import {catchError, of} from 'rxjs';
+import {LibraryStatsService, type LibraryRatedBook} from '../../../library-stats/service/library-stats.service';
+import {ReadStatus} from '../../../../../book/model/book.model';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 interface BookScatterPoint extends ScatterDataPoint {
@@ -44,15 +46,13 @@ const PAGE_RANGES = [
   styleUrls: ['./book-length-chart.component.scss']
 })
 export class BookLengthChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly t = inject(TranslocoService);
-  private readonly metrics = computed<BookLengthMetrics>(() => {
-    if (this.bookService.isBooksLoading()) {
-      return this.emptyMetrics();
-    }
-
-    return this.calculateMetrics(this.bookService.books());
-  });
+  private readonly ratedBooks = toSignal(
+    this.libraryStatsService.ratedBooks(null).pipe(catchError(() => of([] as LibraryRatedBook[]))),
+    {initialValue: [] as LibraryRatedBook[]}
+  );
+  private readonly metrics = computed<BookLengthMetrics>(() => this.calculateMetrics(this.ratedBooks()));
 
   public readonly chartType = 'scatter' as const;
   public readonly sweetSpot = computed(() => this.metrics().sweetSpot);
@@ -136,15 +136,8 @@ export class BookLengthChartComponent {
 
   public readonly chartData = computed(() => this.metrics().chartData);
 
-  private calculateMetrics(books: Book[]): BookLengthMetrics {
-    if (books.length === 0) {
-      return this.emptyMetrics();
-    }
-
-    const ratedBooks = books.filter(b =>
-      b.personalRating != null && b.personalRating > 0 &&
-      b.metadata?.pageCount != null && b.metadata.pageCount > 0
-    );
+  private calculateMetrics(ratedBooksResponse: LibraryRatedBook[]): BookLengthMetrics {
+    const ratedBooks = ratedBooksResponse.filter(b => b.pageCount != null && b.pageCount > 0);
 
     const totalRatedBooks = ratedBooks.length;
     if (totalRatedBooks === 0) {
@@ -157,9 +150,9 @@ export class BookLengthChartComponent {
       const statusLabel = this.getStatusLabel(book.readStatus);
       if (!grouped.has(statusKey)) grouped.set(statusKey, {label: statusLabel, points: []});
       grouped.get(statusKey)!.points.push({
-        x: book.metadata!.pageCount!,
-        y: book.personalRating!,
-        bookTitle: book.metadata?.title || book.fileName || 'Unknown',
+        x: book.pageCount!,
+        y: book.personalRating,
+        bookTitle: book.title || 'Unknown',
         readStatus: statusLabel
       });
     }
@@ -178,7 +171,7 @@ export class BookLengthChartComponent {
     });
 
     // Add trend line
-    const allPoints = ratedBooks.map(b => ({x: b.metadata!.pageCount!, y: b.personalRating!}));
+    const allPoints = ratedBooks.map(b => ({x: b.pageCount!, y: b.personalRating}));
     const trend = this.computeTrendLine(allPoints);
     if (trend) {
       datasets.push({
@@ -201,8 +194,7 @@ export class BookLengthChartComponent {
     };
   }
 
-  private getStatusKey(status?: ReadStatus): string {
-    if (!status) return 'other';
+  private getStatusKey(status: string): string {
     switch (status) {
       case ReadStatus.READ:
       case ReadStatus.PARTIALLY_READ:
@@ -218,8 +210,7 @@ export class BookLengthChartComponent {
     }
   }
 
-  private getStatusLabel(status?: ReadStatus): string {
-    if (!status) return this.t.translate('statsUser.bookLength.statusOther');
+  private getStatusLabel(status: string): string {
     switch (status) {
       case ReadStatus.READ:
       case ReadStatus.PARTIALLY_READ:
@@ -235,16 +226,16 @@ export class BookLengthChartComponent {
     }
   }
 
-  private computeStats(books: Book[]): Pick<BookLengthMetrics, 'sweetSpot' | 'highestRatedLength'> {
+  private computeStats(books: LibraryRatedBook[]): Pick<BookLengthMetrics, 'sweetSpot' | 'highestRatedLength'> {
     let bestRange = '';
     let bestAvg = 0;
 
     for (const range of PAGE_RANGES) {
       const rangeBooks = books.filter(b =>
-        b.metadata!.pageCount! >= range.min && b.metadata!.pageCount! <= range.max
+        b.pageCount! >= range.min && b.pageCount! <= range.max
       );
       if (rangeBooks.length >= 2) {
-        const avg = rangeBooks.reduce((s, b) => s + b.personalRating!, 0) / rangeBooks.length;
+        const avg = rangeBooks.reduce((s, b) => s + b.personalRating, 0) / rangeBooks.length;
         if (avg > bestAvg) {
           bestAvg = avg;
           bestRange = range.label;
@@ -253,8 +244,8 @@ export class BookLengthChartComponent {
     }
 
     const sweetSpot = bestRange ? `${bestRange} pages (avg ${bestAvg.toFixed(1)})` : '-';
-    const highestRated = books.reduce((a, b) => (a.personalRating! >= b.personalRating! ? a : b));
-    const highestRatedLength = `${highestRated.metadata!.pageCount} pages`;
+    const highestRated = books.reduce((a, b) => (a.personalRating >= b.personalRating ? a : b));
+    const highestRatedLength = `${highestRated.pageCount} pages`;
 
     return {sweetSpot, highestRatedLength};
   }

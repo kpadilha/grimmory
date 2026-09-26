@@ -1,14 +1,52 @@
-import {describe, it} from 'vitest';
+import {TestBed} from '@angular/core/testing';
+import {of} from 'rxjs';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
-// NOTE(frontend-seam): Real coverage here needs seams around signal-driven monthly aggregation,
-// dual-axis Chart.js dataset generation, and translated trend labeling so backlog analysis can be
-// tested without coupling the spec to chart rendering internals.
-describe.skip('ReadingDebtChartComponent', () => {
-  it('needs aggregation seams to verify monthly added and finished counts, running backlog, and trend selection', () => {
-    // TODO(seam): Cover processData once the effect-driven chart update path is isolated behind a test seam.
+import {TranslocoService} from '@jsverse/transloco';
+import {LibraryStatsService, type LibraryTimelineResponse} from '../../../library-stats/service/library-stats.service';
+import {ReadingDebtChartComponent} from './reading-debt-chart.component';
+
+describe('ReadingDebtChartComponent', () => {
+  let timeline: ReturnType<typeof vi.fn>;
+  const emptyTimeline: LibraryTimelineResponse = {buckets: [], oldest: null, newest: null, avgDaysToFinish: null};
+
+  beforeEach(() => {
+    timeline = vi.fn(() => of(emptyTimeline));
+
+    TestBed.configureTestingModule({
+      providers: [
+        {provide: LibraryStatsService, useValue: {timeline}},
+        {provide: TranslocoService, useValue: {translate: (key: string) => key}},
+      ],
+    });
   });
 
-  it('needs chart seams to verify the combined bar-plus-line dataset output and translated labels', () => {
-    // TODO(seam): Cover chartData and chartOptions after extracting Chart.js dataset typing and callback behavior from the component runtime.
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    vi.restoreAllMocks();
+  });
+
+  it('requests both monthly timelines (added_on, date_finished) instead of loading books()', () => {
+    TestBed.runInInjectionContext(() => new ReadingDebtChartComponent());
+
+    expect(timeline).toHaveBeenCalledWith('added_on', 'month', null);
+    expect(timeline).toHaveBeenCalledWith('date_finished', 'month', null);
+  });
+
+  it('computes a running backlog from the two server timelines for the current month', () => {
+    const now = new Date();
+    const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    timeline.mockImplementation((field: string) => {
+      if (field === 'added_on') {
+        return of({buckets: [{period: key, count: 5}], oldest: null, newest: null, avgDaysToFinish: null} as LibraryTimelineResponse);
+      }
+      return of({buckets: [{period: key, count: 2}], oldest: null, newest: null, avgDaysToFinish: null} as LibraryTimelineResponse);
+    });
+
+    const component = TestBed.runInInjectionContext(() => new ReadingDebtChartComponent());
+
+    expect(component.hasData).toBe(true);
+    expect(component.currentBacklog).toBe(3);
   });
 });

@@ -76,6 +76,35 @@ export interface SessionScatterResponse {
   dayOfWeek: number;
 }
 
+export interface RatingBucket {
+  rating: number;
+  count: number;
+}
+
+export interface ProgressBucket {
+  range: string;
+  min: number;
+  max: number;
+  count: number;
+}
+
+export interface StatusBucket {
+  status: string;
+  count: number;
+}
+
+export interface BookDistributionsResponse {
+  ratingDistribution: RatingBucket[];
+  progressDistribution: ProgressBucket[];
+  statusDistribution: StatusBucket[];
+}
+
+export interface BookCompletionHeatmapResponse {
+  year: number;
+  month: number;
+  count: number;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -163,6 +192,18 @@ export class UserStatsService {
     return this.http.get<SessionScatterResponse[]>(
       `${this.readingSessionsUrl}/reading/session-scatter`,
       {params: {year: year.toString()}}
+    );
+  }
+
+  getBookDistributions(): Observable<BookDistributionsResponse> {
+    return this.http.get<BookDistributionsResponse>(
+      `${this.readingSessionsUrl}/reading/book-distributions`
+    );
+  }
+
+  getBookCompletionHeatmap(): Observable<BookCompletionHeatmapResponse[]> {
+    return this.http.get<BookCompletionHeatmapResponse[]>(
+      `${this.readingSessionsUrl}/reading/book-completion-heatmap`
     );
   }
 }

@@ -15,7 +15,6 @@ import {ReadingJourneyChartComponent} from './charts/reading-journey-chart/readi
 import {LibrariesSummaryService} from './service/libraries-summary.service';
 import {LibraryFilterService, LibraryOption} from './service/library-filter.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
-import {BookService} from '../../../book/service/book.service';
 import {LibraryService} from '../../../book/service/library.service';
 import {StatsChartThemeService} from '../shared/stats-chart-theme.service';
 import {PageTitleService} from '../../../../shared/service/page-title.service';
@@ -55,15 +54,12 @@ import {provideCharts, withDefaultRegisterables} from 'ng2-charts';
 export class LibraryStatsComponent implements OnInit {
   private readonly libraryFilterService = inject(LibraryFilterService);
   private readonly librariesSummaryService = inject(LibrariesSummaryService);
-  private readonly bookService = inject(BookService);
   private readonly libraryService = inject(LibraryService);
   private readonly t = inject(TranslocoService);
   private readonly chartTheme = inject(StatsChartThemeService);
   private readonly pageTitle = inject(PageTitleService);
 
-  public readonly isLoading = computed(() =>
-    this.bookService.isBooksLoading() || this.libraryService.isLibrariesLoading()
-  );
+  public readonly isLoading = computed(() => this.libraryService.isLibrariesLoading());
   public readonly hasData = computed(() => this.booksSummary().totalBooks > 0);
   public readonly libraryOptions = this.libraryFilterService.libraryOptions;
   public readonly booksSummary = this.librariesSummaryService.booksSummary;

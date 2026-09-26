@@ -1,14 +1,49 @@
-import {describe, it} from 'vitest';
+import {TestBed} from '@angular/core/testing';
+import {of} from 'rxjs';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 
-// NOTE(frontend-seam): Real coverage here needs seams around chart dataset derivation,
-// translated radar-axis labels, and Chart.js option callbacks so the reading-profile output can
-// be asserted without depending on Chart.js metadata internals.
-describe.skip('ReadingDnaChartComponent', () => {
-  it('needs aggregation seams to verify mood, pace, genre, and completion-profile data mapping', () => {
-    // TODO(seam): Cover chartData construction once the radar dataset adapter is extracted from the live chart wrapper.
+import {TranslocoService} from '@jsverse/transloco';
+import {LibraryStatsService} from '../../../library-stats/service/library-stats.service';
+import {ReadingDNAChartComponent} from './reading-dna-chart.component';
+
+describe('ReadingDNAChartComponent', () => {
+  let summary: ReturnType<typeof vi.fn>;
+  let aggregate: ReturnType<typeof vi.fn>;
+  let histogram: ReturnType<typeof vi.fn>;
+  let timeline: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    summary = vi.fn(() => of({totalBooks: 10, totalSizeKb: 0, distinctAuthors: 0, distinctSeries: 0, distinctPublishers: 0}));
+    aggregate = vi.fn(() => of([]));
+    histogram = vi.fn(() => of([]));
+    timeline = vi.fn(() => of({buckets: [], oldest: null, newest: null, avgDaysToFinish: null}));
+
+    TestBed.configureTestingModule({
+      providers: [
+        {provide: LibraryStatsService, useValue: {summary, aggregate, histogram, timeline}},
+        {provide: TranslocoService, useValue: {translate: (key: string) => key}},
+      ],
+    });
   });
 
-  it('needs chart-option seams to verify tooltip and legend behavior for translated profile output', () => {
-    // TODO(seam): Cover chartOptions after the translated callback surface is isolated behind deterministic test seams.
+  it('composes the profile from primitive endpoints, never from books()', () => {
+    TestBed.runInInjectionContext(() => new ReadingDNAChartComponent());
+
+    expect(summary).toHaveBeenCalledWith(null);
+    expect(aggregate).toHaveBeenCalledWith('categories', null);
+    expect(aggregate).toHaveBeenCalledWith('read_status', null);
+    expect(histogram).toHaveBeenCalledWith('page_count', null);
+    expect(timeline).toHaveBeenCalledWith('published_date', 'year', null);
+  });
+
+  it('produces a bounded 0-100 score for every trait once signals resolve', () => {
+    const component = TestBed.runInInjectionContext(() => new ReadingDNAChartComponent());
+    const chartData = component.chartData();
+
+    expect(chartData.datasets[0]?.data).toBeDefined();
+    (chartData.datasets[0]?.data as number[])?.forEach(score => {
+      expect(score).toBeGreaterThanOrEqual(0);
+      expect(score).toBeLessThanOrEqual(100);
+    });
   });
 });

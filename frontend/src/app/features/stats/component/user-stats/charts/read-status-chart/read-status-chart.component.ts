@@ -1,10 +1,12 @@
 import {Component, computed, inject} from '@angular/core';
+import {toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData, Chart} from 'chart.js';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book, ReadStatus} from '../../../../../book/model/book.model';
+import {UserStatsService} from '../../../../../settings/user-management/user-stats.service';
+import {ReadStatus} from '../../../../../book/model/book.model';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
+import {catchError, of} from 'rxjs';
 
 interface ReadingStatusStats {
   status: string;
@@ -39,14 +41,31 @@ type StatusChartData = ChartData<'doughnut', number[], string>;
   styleUrls: ['./read-status-chart.component.scss']
 })
 export class ReadStatusChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly userStatsService = inject(UserStatsService);
   private readonly t = inject(TranslocoService);
-  private readonly readingStatusStats = computed(() => {
-    if (this.bookService.isBooksLoading()) {
+  private readonly distributions = toSignal(
+    this.userStatsService.getBookDistributions().pipe(catchError(() => of(undefined))),
+    {initialValue: undefined}
+  );
+  private readonly readingStatusStats = computed<ReadingStatusStats[]>(() => {
+    const data = this.distributions();
+    if (!data) {
       return [];
     }
 
-    return this.calculateReadingStatusStats(this.bookService.books());
+    return data.statusDistribution
+      .map(bucket => {
+        const rawStatus = Object.values(ReadStatus).includes(bucket.status as ReadStatus)
+          ? (bucket.status as ReadStatus)
+          : ReadStatus.UNSET;
+        return {
+          status: this.formatReadStatus(rawStatus),
+          rawStatus,
+          count: bucket.count,
+          percentage: 0
+        };
+      })
+      .sort((a, b) => b.count - a.count);
   });
 
   public readonly chartType = 'doughnut' as const;
@@ -124,49 +143,6 @@ export class ReadStatusChartComponent {
       };
     }
   });
-
-  private calculateReadingStatusStats(books: Book[]): ReadingStatusStats[] {
-    if (books.length === 0) {
-      return [];
-    }
-
-    return this.processReadingStatusStats(books);
-  }
-
-  private processReadingStatusStats(books: Book[]): ReadingStatusStats[] {
-    if (books.length === 0) {
-      return [];
-    }
-
-    const statusMap = this.buildStatusMap(books);
-    return this.convertMapToStats(statusMap, books.length);
-  }
-
-  private buildStatusMap(books: Book[]): Map<ReadStatus, number> {
-    const statusMap = new Map<ReadStatus, number>();
-
-    for (const book of books) {
-      const rawStatus = book.readStatus;
-      const status: ReadStatus = Object.values(ReadStatus).includes(rawStatus as ReadStatus)
-        ? (rawStatus as ReadStatus)
-        : ReadStatus.UNSET;
-
-      statusMap.set(status, (statusMap.get(status) || 0) + 1);
-    }
-
-    return statusMap;
-  }
-
-  private convertMapToStats(statusMap: Map<ReadStatus, number>, totalBooks: number): ReadingStatusStats[] {
-    return Array.from(statusMap.entries())
-      .map(([status, count]) => ({
-        status: this.formatReadStatus(status),
-        rawStatus: status,
-        count,
-        percentage: Number(((count / totalBooks) * 100).toFixed(1))
-      }))
-      .sort((a, b) => b.count - a.count);
-  }
 
   private formatReadStatus(status: ReadStatus | null | undefined): string {
     const STATUS_MAPPING: Record<string, string> = {

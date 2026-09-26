@@ -1,8 +1,10 @@
-import {Component, effect, inject} from '@angular/core';
+import {Component, DestroyRef, inject} from '@angular/core';
+import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
 import {ChartConfiguration, ChartData} from 'chart.js';
-import {BookService} from '../../../../../book/service/book.service';
+import {catchError, combineLatest, EMPTY} from 'rxjs';
+import {LibraryStatsService} from '../../../library-stats/service/library-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 @Component({
@@ -13,15 +15,18 @@ import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
   styleUrls: ['./reading-debt-chart.component.scss']
 })
 export class ReadingDebtChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly libraryStatsService = inject(LibraryStatsService);
   private readonly t = inject(TranslocoService);
-  private readonly syncChartEffect = effect(() => {
-    if (this.bookService.isBooksLoading()) {
-      return;
-    }
+  private readonly destroyRef = inject(DestroyRef);
 
-    this.processData(this.bookService.books());
-  });
+  constructor() {
+    combineLatest([
+      this.libraryStatsService.timeline('added_on', 'month', null),
+      this.libraryStatsService.timeline('date_finished', 'month', null)
+    ])
+      .pipe(catchError(() => EMPTY), takeUntilDestroyed(this.destroyRef))
+      .subscribe(([added, finished]) => this.processData(added.buckets, finished.buckets));
+  }
 
   public readonly chartType = 'bar' as const;
   public hasData = false;
@@ -59,18 +64,10 @@ export class ReadingDebtChartComponent {
     }
   };
 
-  private processData(books: ReturnType<BookService['books']>): void {
-    if (books.length === 0) {
-      this.hasData = false;
-      this.currentBacklog = 0;
-      this.trend = '';
-      this.chartData = {labels: [], datasets: []};
-      return;
-    }
-
+  private processData(addedBuckets: {period: string; count: number}[], finishedBuckets: {period: string; count: number}[]): void {
     const now = new Date();
-    const monthlyAdded = new Map<string, number>();
-    const monthlyFinished = new Map<string, number>();
+    const monthlyAdded = new Map(addedBuckets.map(b => [b.period, b.count]));
+    const monthlyFinished = new Map(finishedBuckets.map(b => [b.period, b.count]));
     const months: string[] = [];
     const monthLabels: string[] = [];
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -80,21 +77,6 @@ export class ReadingDebtChartComponent {
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       months.push(key);
       monthLabels.push(`${monthNames[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`);
-      monthlyAdded.set(key, 0);
-      monthlyFinished.set(key, 0);
-    }
-
-    for (const book of books) {
-      if (book.addedOn) {
-        const d = new Date(book.addedOn);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        if (monthlyAdded.has(key)) monthlyAdded.set(key, monthlyAdded.get(key)! + 1);
-      }
-      if (book.dateFinished) {
-        const d = new Date(book.dateFinished);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        if (monthlyFinished.has(key)) monthlyFinished.set(key, monthlyFinished.get(key)! + 1);
-      }
     }
 
     const added = months.map(m => monthlyAdded.get(m) || 0);

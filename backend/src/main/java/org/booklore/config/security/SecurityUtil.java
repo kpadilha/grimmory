@@ -132,6 +132,11 @@ public class SecurityUtil {
         return user != null && user.getPermissions().isCanAccessUserStats();
     }
 
+    public boolean canAccessLibraryStats() {
+        var user = getCurrentUser();
+        return user != null && user.getPermissions().isCanAccessLibraryStats();
+    }
+
     public boolean canAccessTaskManager() {
         var user = getCurrentUser();
         return user != null && user.getPermissions().isCanAccessTaskManager();

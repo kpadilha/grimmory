@@ -1,24 +1,28 @@
 import {signal} from '@angular/core';
 import {TestBed} from '@angular/core/testing';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {of} from 'rxjs';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {LibrariesSummaryService} from './libraries-summary.service';
 import {LibraryFilterService} from './library-filter.service';
-import {BookService} from '../../../../book/service/book.service';
-import {Book} from '../../../../book/model/book.model';
+import {LibraryStatsService, type LibrarySummary} from './library-stats.service';
 
 describe('LibrariesSummaryService', () => {
-  const books = signal<Book[]>([]);
   const selectedLibrary = signal<number | null>(null);
+  let summary: ReturnType<typeof vi.fn>;
+
+  function response(overrides: Partial<LibrarySummary>): LibrarySummary {
+    return {totalBooks: 0, totalSizeKb: 0, distinctAuthors: 0, distinctSeries: 0, distinctPublishers: 0, ...overrides};
+  }
 
   beforeEach(() => {
-    books.set([]);
     selectedLibrary.set(null);
+    summary = vi.fn(() => of(response({})));
 
     TestBed.configureTestingModule({
       providers: [
         LibrariesSummaryService,
-        {provide: BookService, useValue: {books}},
+        {provide: LibraryStatsService, useValue: {summary}},
         {provide: LibraryFilterService, useValue: {selectedLibrary}},
       ]
     });
@@ -41,51 +45,20 @@ describe('LibrariesSummaryService', () => {
     expect(service.formattedSize()).toBe('0 KB');
   });
 
-  it('aggregates totals for the selected library and formats megabytes', () => {
-    books.set([
-      {
-        id: 1,
-        libraryId: 1,
-        libraryName: 'Alpha',
-        fileSizeKb: 1024,
-        metadata: {
-          bookId: 1,
-          authors: ['Alice', 'Alice ', 'Bob'],
-          seriesName: 'Series A',
-          publisher: 'Publisher A',
-        },
-      } as Book,
-      {
-        id: 2,
-        libraryId: 2,
-        libraryName: 'Beta',
-        fileSizeKb: 4096,
-        metadata: {
-          bookId: 2,
-          authors: ['Zed'],
-          seriesName: 'Series B',
-          publisher: 'Publisher B',
-        },
-      } as Book,
-      {
-        id: 3,
-        libraryId: 1,
-        libraryName: 'Alpha',
-        fileSizeKb: 1024 * 1024,
-        metadata: {
-          bookId: 3,
-          authors: ['Carol'],
-          seriesName: 'Series A',
-          publisher: 'Publisher A',
-        },
-      } as Book,
-    ]);
-    selectedLibrary.set(1);
+  it('maps the server summary response and formats gigabytes', async () => {
+    summary.mockReturnValue(of(response({
+      totalBooks: 2,
+      totalSizeKb: 1024 + 1024 * 1024,
+      distinctAuthors: 3,
+      distinctSeries: 1,
+      distinctPublishers: 1,
+    })));
 
     const service = TestBed.inject(LibrariesSummaryService);
-    const summary = service.booksSummary();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const result = service.booksSummary();
 
-    expect(summary).toEqual({
+    expect(result).toEqual({
       totalBooks: 2,
       totalSizeKb: 1024 + 1024 * 1024,
       totalAuthors: 3,
@@ -93,66 +66,17 @@ describe('LibrariesSummaryService', () => {
       totalPublishers: 1,
     });
     expect(service.formattedSize()).toBe('1.00 GB');
+    expect(summary).toHaveBeenCalledWith(null);
   });
 
-  it('uses primary file size when the book does not expose a top-level file size', () => {
-    books.set([
-      {
-        id: 1,
-        libraryId: 1,
-        libraryName: 'Alpha',
-        primaryFile: {
-          bookId: 1,
-          fileSizeKb: 2048,
-        },
-        metadata: {
-          bookId: 1,
-          authors: ['Alice'],
-        },
-      } as Book,
-    ]);
+  it('requests the summary scoped to the selected library', async () => {
+    selectedLibrary.set(1);
+    summary.mockReturnValue(of(response({totalBooks: 1, totalSizeKb: 2048})));
 
     const service = TestBed.inject(LibrariesSummaryService);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    service.booksSummary();
 
-    expect(service.booksSummary()).toEqual({
-      totalBooks: 1,
-      totalSizeKb: 2048,
-      totalAuthors: 1,
-      totalSeries: 0,
-      totalPublishers: 0,
-    });
-    expect(service.formattedSize()).toBe('2.00 MB');
+    expect(summary).toHaveBeenCalledWith(1);
   });
-
-  it('prioritizes top-level file size when the book has a primary file size', () => {
-    books.set([
-      {
-        id: 1,
-        libraryId: 1,
-        libraryName: 'Alpha',
-        primaryFile: {
-          bookId: 1,
-          fileSizeKb: 2048,
-        },
-        fileSizeKb: 4096,
-        metadata: {
-          bookId: 1,
-          authors: ['Alice'],
-        },
-      } as Book,
-    ]);
-
-    const service = TestBed.inject(LibrariesSummaryService);
-
-    expect(service.booksSummary()).toEqual({
-      totalBooks: 1,
-      totalSizeKb: 4096,
-      totalAuthors: 1,
-      totalSeries: 0,
-      totalPublishers: 0,
-    });
-    expect(service.formattedSize()).toBe('4.00 MB');
-  });
-
-
 });

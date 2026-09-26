@@ -1,14 +1,46 @@
-import {describe, it} from 'vitest';
+import {TestBed} from '@angular/core/testing';
+import {of} from 'rxjs';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
-// NOTE(frontend-seam): Real coverage here needs seams around signal-driven effect execution,
-// matrix-chart cell sizing, and translated tooltip formatting so completion heatmap aggregation
-// can be asserted without a live chart layout engine.
-describe.skip('ReadingHeatmapChartComponent', () => {
-  it('needs effect and transformation seams to verify year-month counting across the rolling ten-year window', () => {
-    // TODO(seam): Cover calculateHeatmapData and processHeatmapData once the effect-driven chart sync is isolated from Angular and Chart.js runtime state.
+import {TranslocoService} from '@jsverse/transloco';
+import {nextChartEmission} from '../../../../../../core/testing/chart-testing';
+import {UserStatsService, type BookCompletionHeatmapResponse} from '../../../../../settings/user-management/user-stats.service';
+import {ReadingHeatmapChartComponent} from './reading-heatmap-chart.component';
+
+describe('ReadingHeatmapChartComponent', () => {
+  let getBookCompletionHeatmap: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    getBookCompletionHeatmap = vi.fn(() => of([] as BookCompletionHeatmapResponse[]));
+
+    TestBed.configureTestingModule({
+      providers: [
+        {provide: UserStatsService, useValue: {getBookCompletionHeatmap}},
+        {provide: TranslocoService, useValue: {translate: (key: string) => key}},
+      ],
+    });
   });
 
-  it('needs chart-layout seams to verify year labels, alpha scaling, and matrix cell sizing callbacks deterministically', () => {
-    // TODO(seam): Cover updateChartData after extracting Chart.js matrix sizing and tooltip metadata behind an adapter.
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    vi.restoreAllMocks();
+  });
+
+  it('places server-side year/month completion counts onto the matrix grid', async () => {
+    const currentYear = new Date().getFullYear();
+    getBookCompletionHeatmap.mockReturnValue(of([
+      {year: currentYear, month: 3, count: 5},
+      {year: currentYear - 1, month: 12, count: 2},
+    ]));
+
+    const component = TestBed.runInInjectionContext(() => new ReadingHeatmapChartComponent());
+    const nextEmission = nextChartEmission(component.chartData$);
+    component.ngOnInit();
+    const chartData = await nextEmission;
+
+    expect(getBookCompletionHeatmap).toHaveBeenCalled();
+    const points = chartData.datasets[0]?.data as {x: number; y: number; v: number}[];
+    expect(points.find(p => p.x === 2 && p.y === 9)?.v).toBe(5);
+    expect(points.filter(p => p.v > 0)).toHaveLength(2);
   });
 });

@@ -1,10 +1,11 @@
 import {Component, computed, inject} from '@angular/core';
+import {toSignal} from '@angular/core/rxjs-interop';
 import {BaseChartDirective} from 'ng2-charts';
 import {ChartConfiguration, ChartData} from 'chart.js';
 import {Tooltip} from '@openng/optimus-ui/tooltip';
-import {BookService} from '../../../../../book/service/book.service';
-import {Book} from '../../../../../book/model/book.model';
+import {UserStatsService} from '../../../../../settings/user-management/user-stats.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
+import {catchError, of} from 'rxjs';
 
 interface RatingStats {
   ratingRange: string;
@@ -53,14 +54,26 @@ type RatingChartData = ChartData<'bar', number[], string>;
   styleUrls: ['./personal-rating-chart.component.scss']
 })
 export class PersonalRatingChartComponent {
-  private readonly bookService = inject(BookService);
+  private readonly userStatsService = inject(UserStatsService);
   private readonly t = inject(TranslocoService);
-  private readonly ratingStats = computed(() => {
-    if (this.bookService.isBooksLoading()) {
+  private readonly distributions = toSignal(
+    this.userStatsService.getBookDistributions().pipe(catchError(() => of(undefined))),
+    {initialValue: undefined}
+  );
+  private readonly ratingStats = computed<RatingStats[]>(() => {
+    const data = this.distributions();
+    if (!data) {
       return [];
     }
 
-    return this.calculatePersonalRatingStats(this.bookService.books());
+    return RATING_RANGES.map(range => {
+      const bucket = data.ratingDistribution.find(r => String(r.rating) === range.range);
+      return {
+        ratingRange: range.range,
+        count: bucket?.count ?? 0,
+        averageRating: bucket ? range.min : 0
+      };
+    });
   });
 
   public readonly chartType = 'bar' as const;
@@ -172,41 +185,4 @@ export class PersonalRatingChartComponent {
     }
   });
 
-  private calculatePersonalRatingStats(books: Book[]): RatingStats[] {
-    if (books.length === 0) {
-      return [];
-    }
-
-    return this.processPersonalRatingStats(books);
-  }
-
-  private processPersonalRatingStats(books: Book[]): RatingStats[] {
-    const rangeCounts = new Map<string, { count: number, totalRating: number }>();
-    RATING_RANGES.forEach(range => rangeCounts.set(range.range, {count: 0, totalRating: 0}));
-
-    books.forEach(book => {
-      const personalRating = book.personalRating;
-
-      if (personalRating && personalRating > 0) {
-        for (const range of RATING_RANGES) {
-          if (personalRating >= range.min && personalRating <= range.max) {
-            const rangeData = rangeCounts.get(range.range)!;
-            rangeData.count++;
-            rangeData.totalRating += personalRating;
-            break;
-          }
-        }
-      }
-    });
-
-    // Return all ratings, including those with 0 count
-    return RATING_RANGES.map(range => {
-      const data = rangeCounts.get(range.range)!;
-      return {
-        ratingRange: range.range,
-        count: data.count,
-        averageRating: data.count > 0 ? data.totalRating / data.count : 0
-      };
-    });
-  }
 }
