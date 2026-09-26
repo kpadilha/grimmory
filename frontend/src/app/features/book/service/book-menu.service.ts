@@ -350,6 +350,9 @@ export class BookMenuService {
                        this.messageService.add({severity: 'error', summary: this.t.translate('common.error'), detail: this.t.translate('book.menuService.toast.unshelveFailedDetail')});
                      }
                    });
+               }).catch(() => {
+                 this.loadingService.hide(loader);
+                 this.messageService.add({severity: 'error', summary: this.t.translate('common.error'), detail: this.t.translate('book.menuService.toast.unshelveFailedDetail')});
                });
              }
            });

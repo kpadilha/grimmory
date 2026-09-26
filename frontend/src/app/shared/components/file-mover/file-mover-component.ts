@@ -125,7 +125,15 @@ export class FileMoverComponent implements OnDestroy {
 
   constructor() {
     this.bookIds = new Set(this.config.data?.bookIds ?? []);
-    this.bookService.getBooksByIds([...this.bookIds]).then(books => this.books.set(books));
+    this.bookService.getBooksByIds([...this.bookIds]).then(books => this.books.set(books)).catch(() => {
+      this.messageService.add({
+        severity: 'error',
+        summary: 'Oops! Something went wrong',
+        detail: 'We had trouble loading the selected files. Please try again.',
+        life: 3000
+      });
+      this.ref.close();
+    });
   }
 
   ngOnDestroy(): void {
