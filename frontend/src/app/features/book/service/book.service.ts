@@ -20,6 +20,7 @@ import {
   bookRecommendationsQueryKey,
 } from './book-query-keys';
 import {invalidateAllBookQueries} from '../data/book-query-cache';
+import {bookQueryKeys} from '../data/book-query-keys';
 import {
   invalidateAllBookCaches,
   invalidateDeletedBookQueries,
@@ -62,7 +63,7 @@ export class BookService {
   // Autocomplete values across the whole collection, from the uncapped facets/values aggregate -
   // never a client scan of every book.
   private readonly uniqueMetadataQuery = injectQuery(() => ({
-    queryKey: ['books', 'facets', 'values', 'unique-metadata'] as const,
+    queryKey: bookQueryKeys.uniqueMetadata(),
     queryFn: () => this.metadataValuesService.fetch(BookService.UNIQUE_METADATA_FACET_KEYS),
     enabled: !!this.token(),
     staleTime: 5 * 60_000,

@@ -23,6 +23,8 @@ export const bookQueryKeys = {
   idQueries: () => [...bookQueryKeys.collections(), 'ids'] as const,
   ids: (params: BookQueryParams) =>
     [...bookQueryKeys.idQueries(), params] as const,
+  // Under collections() so the STOMP book-change handler's collection-wide invalidation covers it.
+  uniqueMetadata: () => [...bookQueryKeys.collections(), 'facets', 'values', 'unique-metadata'] as const,
   details: () => [...bookQueryKeys.all(), 'detail'] as const,
   detailQueries: (bookId: number) =>
     [...bookQueryKeys.details(), bookId] as const,
