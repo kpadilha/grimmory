@@ -25,6 +25,9 @@ import {
   invalidateDeletedBookQueries,
   patchBooksInCache,
 } from './legacy-book-cache';
+import {BookQueryService} from '../data/book-query.service';
+import {GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
+import {toFacetTotalCount} from '../data/book-query.models';
 
 @Injectable({
   providedIn: 'root',
@@ -41,6 +44,7 @@ export class BookService {
   private bookPatchService = inject(BookPatchService);
   private queryClient = inject(QueryClient);
   private readonly t = inject(TranslocoService);
+  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
 
   private booksQuery = injectQuery(() => ({
@@ -49,6 +53,14 @@ export class BookService {
   }));
 
   books = computed(() => this.booksQuery.data() ?? []);
+
+  // Boot-time "all books" total from the server's shelf_status facet counts, not the full 132k-book collection.
+  private readonly globalFacetsQuery = injectQuery(() => ({
+    ...this.bookQueryService.facets(GLOBAL_FACETS_PARAMS),
+    enabled: !!this.token(),
+  }));
+
+  readonly totalBookCount = computed(() => toFacetTotalCount(this.globalFacetsQuery.data(), 'shelf_status'));
 
   /** Pre-computed unique metadata values for autocomplete across the app. */
   readonly uniqueMetadata = computed(() => {

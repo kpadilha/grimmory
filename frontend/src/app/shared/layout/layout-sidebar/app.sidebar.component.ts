@@ -221,8 +221,8 @@ export class AppSidebarComponent {
     this.activeLang();
     return [
       ...buildHomeSection(this.translate, {
-        allBooks: this.bookService.books().length,
-        series: this.seriesDataService.allSeries().length,
+        allBooks: this.bookService.totalBookCount(),
+        series: this.seriesDataService.totalSeriesCount(),
         authors: this.allAuthors()?.length ?? 0,
       }),
       ...buildLibrarySection(

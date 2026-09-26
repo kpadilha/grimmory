@@ -13,6 +13,9 @@ import {API_CONFIG} from '../../../core/config/api-config';
 import {Book} from '../model/book.model';
 import {UserService} from '../../settings/user-management/user.service';
 import {AuthService} from '../../../shared/service/auth.service';
+import {BookQueryService} from '../data/book-query.service';
+import {GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
+import {toFacetNumericCountMap, toFacetValueCount} from '../data/book-query.models';
 
 const KOBO_SHELF_NAME = 'Kobo';
 const KOBO_SHELF_ICON = 'pi pi-tablet';
@@ -25,10 +28,17 @@ export class ShelfService {
   private userService = inject(UserService);
   private authService = inject(AuthService);
   private queryClient = inject(QueryClient);
+  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
 
   private shelvesQuery = injectQuery(() => ({
     ...this.getShelvesQueryOptions(),
+    enabled: !!this.token(),
+  }));
+
+  // Sidebar badge counts - server-side per-shelf facet counts, not the full collection.
+  private readonly globalFacetsQuery = injectQuery(() => ({
+    ...this.bookQueryService.facets(GLOBAL_FACETS_PARAMS),
     enabled: !!this.token(),
   }));
 
@@ -118,29 +128,10 @@ export class ShelfService {
     return this.bookService.books().filter(book => !book.shelves || book.shelves.length === 0).length;
   }
 
-  readonly bookCountByShelfId = computed(() => {
-    const currentUserId = this.userService.getCurrentUser()?.id;
-    const counts = new Map<number, number>();
-
-    for (const book of this.bookService.books()) {
-      for (const shelf of book.shelves ?? []) {
-        if (shelf.id != null) {
-          counts.set(shelf.id, (counts.get(shelf.id) ?? 0) + 1);
-        }
-      }
-    }
-
-    for (const shelf of this.shelves()) {
-      if (shelf.userId !== currentUserId && shelf.id != null) {
-        counts.set(shelf.id, shelf.bookCount ?? 0);
-      }
-    }
-
-    return counts;
-  });
+  readonly bookCountByShelfId = computed(() => toFacetNumericCountMap(this.globalFacetsQuery.data(), 'shelf'));
 
   readonly unshelvedBookCount = computed(() =>
-    this.bookService.books().filter(book => !book.shelves || book.shelves.length === 0).length
+    toFacetValueCount(this.globalFacetsQuery.data(), 'shelf_status', 'unshelved')
   );
 
   private decorateShelves(shelves: Shelf[]): Shelf[] {

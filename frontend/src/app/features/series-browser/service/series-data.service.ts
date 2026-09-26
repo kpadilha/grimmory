@@ -1,5 +1,10 @@
 import {computed, inject, Injectable} from '@angular/core';
+import {injectQuery} from '@tanstack/angular-query-experimental';
 import {BookService} from '../../book/service/book.service';
+import {BookQueryService} from '../../book/data/book-query.service';
+import {GLOBAL_FACETS_PARAMS} from '../../book/data/book-query-params';
+import {toFacetDistinctCount} from '../../book/data/book-query.models';
+import {AuthService} from '../../../shared/service/auth.service';
 import {Book, computeSeriesReadStatus, ReadStatus} from '../../book/model/book.model';
 import {SeriesSummary} from '../model/series.model';
 
@@ -9,8 +14,19 @@ import {SeriesSummary} from '../model/series.model';
 export class SeriesDataService {
 
   private bookService = inject(BookService);
+  private readonly bookQueryService = inject(BookQueryService);
+  private readonly authService = inject(AuthService);
+  private readonly token = this.authService.token;
 
   allSeries = computed(() => this.buildSeriesSummaries(this.bookService.books()));
+
+  // Sidebar badge count from the server's series facet group, not the full 132k-book collection.
+  private readonly globalFacetsQuery = injectQuery(() => ({
+    ...this.bookQueryService.facets(GLOBAL_FACETS_PARAMS),
+    enabled: !!this.token(),
+  }));
+
+  readonly totalSeriesCount = computed(() => toFacetDistinctCount(this.globalFacetsQuery.data(), 'series'));
 
   private buildSeriesSummaries(books: Book[]): SeriesSummary[] {
     const seriesMap = new Map<string, Book[]>();

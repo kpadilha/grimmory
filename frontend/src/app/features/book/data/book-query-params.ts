@@ -93,6 +93,12 @@ export interface BookPageParams extends BookQueryParams {
   size: number;
 }
 
+// Unfiltered facets response, shared by every sidebar count source instead of the full collection.
+export const GLOBAL_FACETS_PARAMS: BookCollectionFilterParams = {
+  facets: EMPTY_FACET_SELECTION,
+  facetLogic: 'and',
+};
+
 export interface BookDescriptionOptions {
   withDescription: boolean;
 }

@@ -13,6 +13,9 @@ import {AUTHORS_QUERY_KEY} from '../../author-browser/service/author-query-keys'
 import {invalidateShelfDefinitions} from '../data/shelf-definition-query-cache';
 import {invalidateAllBookCaches} from './legacy-book-cache';
 import {SHELVES_QUERY_KEY} from './shelf-query-keys';
+import {BookQueryService} from '../data/book-query.service';
+import {GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
+import {toFacetNumericCountMap} from '../data/book-query.models';
 
 @Injectable({providedIn: 'root'})
 export class LibraryService {
@@ -21,10 +24,17 @@ export class LibraryService {
   private bookService = inject(BookService);
   private authService = inject(AuthService);
   private queryClient = inject(QueryClient);
+  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
 
   private librariesQuery = injectQuery(() => ({
     ...this.getLibrariesQueryOptions(),
+    enabled: !!this.token(),
+  }));
+
+  // Sidebar badge counts - server-side per-library facet counts, not the full collection.
+  private readonly globalFacetsQuery = injectQuery(() => ({
+    ...this.bookQueryService.facets(GLOBAL_FACETS_PARAMS),
     enabled: !!this.token(),
   }));
 
@@ -131,15 +141,7 @@ export class LibraryService {
     return this.bookService.books().filter(book => book.libraryId === libraryId).length;
   }
 
-  readonly bookCountByLibraryId = computed(() => {
-    const counts = new Map<number, number>();
-    for (const book of this.bookService.books()) {
-      if (book.libraryId != null) {
-        counts.set(book.libraryId, (counts.get(book.libraryId) ?? 0) + 1);
-      }
-    }
-    return counts;
-  });
+  readonly bookCountByLibraryId = computed(() => toFacetNumericCountMap(this.globalFacetsQuery.data(), 'library'));
 
   getBookCountsByFormat(libraryId: number): Observable<Record<string, number>> {
     return from(this.queryClient.ensureQueryData(this.getLibraryFormatCountsQueryOptions(libraryId)));
