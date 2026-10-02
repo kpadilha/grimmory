@@ -3,14 +3,11 @@ import {HttpClient} from '@angular/common/http';
 import {lastValueFrom, Observable} from 'rxjs';
 import {tap} from 'rxjs/operators';
 import {injectQuery, queryOptions, QueryClient} from '@tanstack/angular-query-experimental';
-import {injectQueries} from '@tanstack/angular-query-experimental/inject-queries-experimental';
 
 import {API_CONFIG} from '../../../core/config/api-config';
 import {AuthService} from '../../../shared/service/auth.service';
 import {IconType} from '../../../shared/icons/icon-selection';
 import {invalidateBookCollections} from '../../book/data/book-query-cache';
-import {BookQueryService} from '../../book/data/book-query.service';
-import {BookPageParams} from '../../book/data/book-query-params';
 
 export interface MagicShelf {
   id?: number | null;
@@ -23,17 +20,6 @@ export interface MagicShelf {
 
 const MAGIC_SHELVES_QUERY_KEY = ['magicShelves'] as const;
 
-// Not a real shelf row, so its count can't come off the unfiltered shelf facet - a size-1
-// filtered page (the server evaluates the same rule as the OPDS feed) still beats 132k books.
-function magicShelfCountParams(magicShelfId: number): BookPageParams {
-  return {
-    facets: {shelf: [`magic:${magicShelfId}`]},
-    facetLogic: 'and',
-    sort: [],
-    size: 1,
-  };
-}
-
 @Injectable({
   providedIn: 'root',
 })
@@ -43,7 +29,6 @@ export class MagicShelfService {
   private readonly http = inject(HttpClient);
   private readonly authService = inject(AuthService);
   private readonly queryClient = inject(QueryClient);
-  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
 
   private readonly shelvesQuery = injectQuery(() => ({
@@ -110,25 +95,6 @@ export class MagicShelfService {
   findShelfById(id: number): MagicShelf | undefined {
     return this.shelves().find(shelf => shelf.id === id);
   }
-
-  // Sidebar badge counts - one small server-filtered page per magic shelf, never the full collection.
-  private readonly idsWithMagicShelves = computed(() =>
-    this.shelves().filter((shelf): shelf is MagicShelf & {id: number} => shelf.id != null)
-  );
-
-  private readonly shelfCountQueries = injectQueries(() => ({
-    queries: this.idsWithMagicShelves().map(shelf => this.bookQueryService.page(magicShelfCountParams(shelf.id))),
-  }));
-
-  readonly bookCountByMagicShelfId = computed(() => {
-    const shelves = this.idsWithMagicShelves();
-    const results = this.shelfCountQueries();
-    const counts = new Map<number, number>();
-    shelves.forEach((shelf, index) => {
-      counts.set(shelf.id, results[index]?.data()?.page.totalElements ?? 0);
-    });
-    return counts;
-  });
 
   deleteShelf(id: number): Observable<void> {
     return this.http.delete<void>(`${this.url}/${id}`).pipe(

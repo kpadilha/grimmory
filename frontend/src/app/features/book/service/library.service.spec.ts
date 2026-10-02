@@ -32,7 +32,6 @@ describe('LibraryService', () => {
   beforeEach(() => {
     authService = createAuthServiceStub();
     queryClientHarness = createQueryClientHarness();
-
     vi.spyOn(queryClientHarness.queryClient, 'invalidateQueries').mockResolvedValue(undefined);
     vi.spyOn(queryClientHarness.queryClient, 'removeQueries').mockImplementation(() => undefined);
 
@@ -50,9 +49,6 @@ describe('LibraryService', () => {
   });
 
   afterEach(() => {
-    // globalFacetsQuery (bookCountByLibraryId) fires eagerly and isn't every test's concern -
-    // drain it so it never fails an unrelated test's verify().
-    httpTestingController.match(req => req.url.includes('/api/v1/books/facets')).forEach(req => req.flush({facets: []}));
     httpTestingController.verify();
     queryClientHarness.queryClient.clear();
     TestBed.resetTestingModule();

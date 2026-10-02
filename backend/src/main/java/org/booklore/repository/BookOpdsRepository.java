@@ -80,7 +80,7 @@ public interface BookOpdsRepository extends JpaRepository<BookEntity, Long>, Jpa
             JOIN m.book b
             WHERE (b.deleted IS NULL OR b.deleted = false)
               AND a.name IS NOT NULL
-            ORDER BY a.name
+            ORDER BY a.name, b.id DESC
             """)
     Page<String> findDistinctAuthorNames(Pageable pageable);
 
@@ -92,7 +92,7 @@ public interface BookOpdsRepository extends JpaRepository<BookEntity, Long>, Jpa
             WHERE (b.deleted IS NULL OR b.deleted = false)
               AND b.library.id IN :libraryIds
               AND a.name IS NOT NULL
-            ORDER BY a.name
+            ORDER BY a.name, b.id DESC
             """)
     Page<String> findDistinctAuthorNamesByLibraryIds(@Param("libraryIds") Collection<Long> libraryIds, Pageable pageable);
 
@@ -106,7 +106,7 @@ public interface BookOpdsRepository extends JpaRepository<BookEntity, Long>, Jpa
             WHERE (b.deleted IS NULL OR b.deleted = false)
               AND m.seriesName IS NOT NULL
               AND m.seriesName != ''
-            ORDER BY m.seriesName
+            ORDER BY m.seriesName, m.bookId
             """)
     Page<String> findDistinctSeries(Pageable pageable);
 
@@ -117,7 +117,7 @@ public interface BookOpdsRepository extends JpaRepository<BookEntity, Long>, Jpa
               AND b.library.id IN :libraryIds
               AND m.seriesName IS NOT NULL
               AND m.seriesName != ''
-            ORDER BY m.seriesName
+            ORDER BY m.seriesName, m.bookId
             """)
     Page<String> findDistinctSeriesByLibraryIds(@Param("libraryIds") Collection<Long> libraryIds, Pageable pageable);
 }

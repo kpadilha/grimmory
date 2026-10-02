@@ -12,9 +12,6 @@ import {AUTHORS_QUERY_KEY} from '../../author-browser/service/author-query-keys'
 import {invalidateShelfDefinitions} from '../data/shelf-definition-query-cache';
 import {invalidateAllBookCaches} from './legacy-book-cache';
 import {SHELVES_QUERY_KEY} from './shelf-query-keys';
-import {BookQueryService} from '../data/book-query.service';
-import {GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
-import {toFacetNumericCountMap} from '../data/book-query.models';
 
 @Injectable({providedIn: 'root'})
 export class LibraryService {
@@ -22,17 +19,10 @@ export class LibraryService {
   private http = inject(HttpClient);
   private authService = inject(AuthService);
   private queryClient = inject(QueryClient);
-  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
 
   private librariesQuery = injectQuery(() => ({
     ...this.getLibrariesQueryOptions(),
-    enabled: !!this.token(),
-  }));
-
-  // Sidebar badge counts - server-side per-library facet counts, not the full collection.
-  private readonly globalFacetsQuery = injectQuery(() => ({
-    ...this.bookQueryService.facets(GLOBAL_FACETS_PARAMS),
     enabled: !!this.token(),
   }));
 
@@ -134,10 +124,6 @@ export class LibraryService {
   findLibraryById(id: number): Library | undefined {
     return this.libraries().find(library => library.id === id);
   }
-
-  // ponytail: capped at 100 distinct libraries (BookFacetService.MAX_VALUES) - a homelab
-  // won't hit that; raise the cap or add a dedicated count if it ever does.
-  readonly bookCountByLibraryId = computed(() => toFacetNumericCountMap(this.globalFacetsQuery.data(), 'library'));
 
   getBookCountsByFormat(libraryId: number): Observable<Record<string, number>> {
     return from(this.queryClient.ensureQueryData(this.getLibraryFormatCountsQueryOptions(libraryId)));

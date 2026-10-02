@@ -46,20 +46,6 @@ function buildBook(id: number, overrides: BuildBookOverrides = {}): Book {
   };
 }
 
-function facetGroup(key: string, values: {value: string; count: number}[]) {
-  return {
-    metadata: {rel: 'facet', key, title: key},
-    links: values.map(v => ({
-      rel: ['facet'],
-      href: '',
-      type: '',
-      title: v.value,
-      value: v.value,
-      properties: {numberOfItems: v.count},
-    })),
-  };
-}
-
 describe('BookService', () => {
   let service: BookService;
   let httpTestingController: HttpTestingController;
@@ -122,16 +108,11 @@ describe('BookService', () => {
     flushSignalAndQueryEffects();
   }
 
-  // Every enabled instance boots two facet-scoped queries (shelf_status total, autocomplete
-  // values) - never the full collection. Tests that don't care about their data just drain them.
+  // Every enabled instance boots the autocomplete-values query - never the full collection.
+  // Tests that don't care about its data just drain it.
   function flushGlobalQueries(
-    shelfStatusValues: {value: string; count: number}[] = [],
     metadataValues: Record<string, {value: string; bookIds: number[]}[]> = {},
   ): void {
-    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets')).flush({
-      links: [],
-      facets: shelfStatusValues.length > 0 ? [facetGroup('shelf_status', shelfStatusValues)] : [],
-    });
     httpTestingController.expectOne(req => req.url.endsWith('/api/v1/books/facets/values')).flush(metadataValues);
   }
 
@@ -146,11 +127,10 @@ describe('BookService', () => {
     vi.restoreAllMocks();
   });
 
-  it('derives totalBookCount and uniqueMetadata from the server facet aggregates', async () => {
+  it('derives uniqueMetadata from the server facet aggregates', async () => {
     setup();
 
     flushGlobalQueries(
-      [{value: 'read', count: 30}, {value: 'unread', count: 18}],
       {
         author: [{value: 'Le Guin', bookIds: [1]}, {value: 'Pratchett', bookIds: [2]}],
         genre: [{value: 'Fantasy', bookIds: [1, 2]}, {value: 'Humor', bookIds: [2]}],
@@ -162,7 +142,6 @@ describe('BookService', () => {
     );
     await flushQueryAsync();
 
-    expect(service.totalBookCount()).toBe(48);
     expect(service.uniqueMetadata()).toEqual({
       authors: ['Le Guin', 'Pratchett'],
       categories: ['Fantasy', 'Humor'],
@@ -176,16 +155,12 @@ describe('BookService', () => {
   it('gates the facet queries on the auth token and starts them once a token is available', async () => {
     setup(null);
 
-    expect(service.totalBookCount()).toBe(0);
-    httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books/facets'));
     httpTestingController.expectNone(req => req.url.endsWith('/api/v1/books/facets/values'));
 
     authService.token.set('token-123');
     flushSignalAndQueryEffects();
-    flushGlobalQueries([{value: 'read', count: 5}]);
+    flushGlobalQueries();
     await flushQueryAsync();
-
-    expect(service.totalBookCount()).toBe(5);
   });
 
   it('fetches only the requested ids from /books/batch', async () => {

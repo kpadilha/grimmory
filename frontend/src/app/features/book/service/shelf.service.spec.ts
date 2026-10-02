@@ -54,9 +54,6 @@ describe('ShelfService', () => {
   });
 
   afterEach(() => {
-    // globalFacetsQuery (bookCountByShelfId/unshelvedBookCount) fires eagerly and isn't every
-    // test's concern - drain it so it never fails an unrelated test's verify().
-    httpTestingController.match(req => req.url.includes('/api/v1/books/facets')).forEach(req => req.flush({facets: []}));
     httpTestingController.verify();
     queryClientHarness.queryClient.clear();
     TestBed.resetTestingModule();
@@ -165,27 +162,4 @@ describe('ShelfService', () => {
     expect(bookService.removeBooksFromShelf).toHaveBeenCalledWith(11);
   });
 
-  it('builds shelf count maps from the server-side shelf facet, not a client book scan', async () => {
-    httpTestingController.expectOne(req => req.url.endsWith('/api/v1/shelves')).flush([
-      buildShelf({id: 1, userId: 7, bookCount: 99}),
-      buildShelf({id: 2, userId: 10, bookCount: 6}),
-    ]);
-    await flushShelvesQueryResult();
-
-    httpTestingController.expectOne(req => req.url.includes('/api/v1/books/facets')).flush({
-      facets: [{
-        metadata: {rel: 'facet', key: 'shelf', title: 'Shelf'},
-        links: [
-          {rel: ['facet'], href: '', type: '', title: '1', value: '1', properties: {numberOfItems: 2}},
-          {rel: ['facet'], href: '', type: '', title: '2', value: '2', properties: {numberOfItems: 6}},
-        ],
-      }],
-    });
-    await flushShelvesQueryResult();
-
-    const counts = service.bookCountByShelfId();
-
-    expect(counts.get(1)).toBe(2);
-    expect(counts.get(2)).toBe(6);
-  });
 });

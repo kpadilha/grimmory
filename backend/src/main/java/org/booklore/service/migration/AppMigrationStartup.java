@@ -20,6 +20,7 @@ public class AppMigrationStartup {
     private final PopulateAuthorSortNameMigration populateAuthorSortNameMigration;
     private final RemoveBundledCustomSvgIconsMigration removeBundledCustomSvgIconsMigration;
     private final OIDCClientSecretSeparateKey oidcClientSecretSeparateKey;
+    private final RefreshTokenSwapTokenToJWTID refreshTokenSwapTokenToJWTID;
 
     @EventListener(ApplicationReadyEvent.class)
     public void runMigrationsOnce() {
@@ -32,5 +33,6 @@ public class AppMigrationStartup {
         appMigrationService.executeMigration(populateAuthorSortNameMigration);
         appMigrationService.executeMigration(removeBundledCustomSvgIconsMigration);
         appMigrationService.executeMigration(oidcClientSecretSeparateKey);
+        appMigrationService.executeMigration(refreshTokenSwapTokenToJWTID);
     }
 }

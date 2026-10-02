@@ -12,9 +12,6 @@ import {BookService} from './book.service';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {Book} from '../model/book.model';
 import {AuthService} from '../../../shared/service/auth.service';
-import {BookQueryService} from '../data/book-query.service';
-import {GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
-import {toFacetNumericCountMap, toFacetValueCount} from '../data/book-query.models';
 
 const KOBO_SHELF_NAME = 'Kobo';
 const KOBO_SHELF_ICON = 'pi pi-tablet';
@@ -26,17 +23,10 @@ export class ShelfService {
   private bookService = inject(BookService);
   private authService = inject(AuthService);
   private queryClient = inject(QueryClient);
-  private readonly bookQueryService = inject(BookQueryService);
   private readonly token = this.authService.token;
 
   private shelvesQuery = injectQuery(() => ({
     ...this.getShelvesQueryOptions(),
-    enabled: !!this.token(),
-  }));
-
-  // Sidebar badge counts - server-side per-shelf facet counts, not the full collection.
-  private readonly globalFacetsQuery = injectQuery(() => ({
-    ...this.bookQueryService.facets(GLOBAL_FACETS_PARAMS),
     enabled: !!this.token(),
   }));
 
@@ -105,14 +95,6 @@ export class ShelfService {
   getBooksOnShelf(shelfId: number): Observable<Book[]> {
     return this.http.get<Book[]>(`${this.url}/${shelfId}/books`);
   }
-
-  // ponytail: capped at 100 distinct shelves (BookFacetService.MAX_VALUES) - a homelab
-  // won't hit that; raise the cap or add a dedicated count if it ever does.
-  readonly bookCountByShelfId = computed(() => toFacetNumericCountMap(this.globalFacetsQuery.data(), 'shelf'));
-
-  readonly unshelvedBookCount = computed(() =>
-    toFacetValueCount(this.globalFacetsQuery.data(), 'shelf_status', 'unshelved')
-  );
 
   private decorateShelves(shelves: Shelf[]): Shelf[] {
     return shelves.map((shelf) => ({

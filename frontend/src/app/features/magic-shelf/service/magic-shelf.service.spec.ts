@@ -66,9 +66,6 @@ describe('MagicShelfService', () => {
   });
 
   afterEach(() => {
-    // bookCountByMagicShelfId fires one filtered page request per shelf as soon as the shelves
-    // list loads - not every test's concern, so drain whatever is left before verify().
-    httpTestingController.match(req => req.url.includes('/api/v1/books/page')).forEach(req => req.flush({content: [], page: {totalElements: 0}}));
     httpTestingController.verify();
     queryClientHarness.queryClient.clear();
     TestBed.resetTestingModule();
@@ -193,4 +190,5 @@ describe('MagicShelfService', () => {
     expect(service.findShelfById(2)).toEqual(archiveShelf);
     expect(service.findShelfById(999)).toBeUndefined();
   });
+
 });

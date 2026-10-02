@@ -27,8 +27,8 @@ import {
   patchBooksInCache,
 } from './legacy-book-cache';
 import {BookQueryService} from '../data/book-query.service';
-import {DEFAULT_BOOK_SORT_TERMS, GLOBAL_FACETS_PARAMS} from '../data/book-query-params';
-import {bookSummaryToBook, toFacetTotalCount} from '../data/book-query.models';
+import {DEFAULT_BOOK_SORT_TERMS} from '../data/book-query-params';
+import {bookSummaryToBook} from '../data/book-query.models';
 import {MetadataValuesService} from '../../metadata/component/metadata-manager/metadata-values.service';
 
 @Injectable({
@@ -49,14 +49,6 @@ export class BookService {
   private readonly bookQueryService = inject(BookQueryService);
   private readonly metadataValuesService = inject(MetadataValuesService);
   private readonly token = this.authService.token;
-
-  // Boot-time "all books" total from the server's shelf_status facet counts, not the full 132k-book collection.
-  private readonly globalFacetsQuery = injectQuery(() => ({
-    ...this.bookQueryService.facets(GLOBAL_FACETS_PARAMS),
-    enabled: !!this.token(),
-  }));
-
-  readonly totalBookCount = computed(() => toFacetTotalCount(this.globalFacetsQuery.data(), 'shelf_status'));
 
   private static readonly UNIQUE_METADATA_FACET_KEYS = ['author', 'genre', 'mood', 'tag', 'publisher', 'series'] as const;
 

@@ -1,5 +1,5 @@
 import {computed, inject, Injectable} from '@angular/core';
-import {HttpClient, HttpParams} from '@angular/common/http';
+import {HttpClient} from '@angular/common/http';
 import {lastValueFrom, Observable} from 'rxjs';
 import {map, takeUntil} from 'rxjs/operators';
 import {infiniteQueryOptions, injectQuery} from '@tanstack/angular-query-experimental';
@@ -64,22 +64,6 @@ export class SeriesDataService {
       ...QUERY_DEFAULTS,
     });
   }
-
-  // Sidebar badge count from the summary endpoint's cached aggregate totalElements, not the
-  // series facet - that facet caps at 100 distinct values and freezes the badge past that.
-  private readonly seriesCountQuery = injectQuery(() => ({
-    queryKey: ['books', 'series', 'summary', 'count'] as const,
-    queryFn: ({signal}: {signal: AbortSignal}) => lastValueFrom(this.http.get<RawSeriesPage>(this.url, {
-      params: new HttpParams().set('page', '0').set('size', '1'),
-    }).pipe(
-      map(raw => raw.page.totalElements),
-      takeUntil(abortSignal(signal)),
-    )),
-    enabled: !!this.token(),
-    ...QUERY_DEFAULTS,
-  }));
-
-  readonly totalSeriesCount = computed(() => this.seriesCountQuery.data() ?? 0);
 
   private fetchPage(params: SeriesQueryParams, nextHref: string | null, signal: AbortSignal): Promise<SeriesPage> {
     const request$: Observable<RawSeriesPage> = nextHref !== null
