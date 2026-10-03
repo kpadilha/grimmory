@@ -294,6 +294,30 @@ class AuthorMetadataServiceTest {
     }
 
     @Test
+    void countAuthors_cachesTheTotalPerUser() {
+        when(authorRepository.countAllAuthors()).thenReturn(48_620L);
+
+        assertThat(service.countAuthors()).isEqualTo(48_620L);
+        assertThat(service.countAuthors()).isEqualTo(48_620L);
+
+        verify(authorRepository, times(1)).countAllAuthors();
+    }
+
+    @Test
+    void countAuthors_nonAdminScopesToAssignedLibraries() {
+        BookLoreUser.UserPermissions nonAdmin = new BookLoreUser.UserPermissions();
+        nonAdmin.setAdmin(false);
+        Library library = new Library();
+        library.setId(9L);
+        BookLoreUser user = BookLoreUser.builder().id(2L).permissions(nonAdmin).assignedLibraries(List.of(library)).build();
+        when(authenticationService.getAuthenticatedUser()).thenReturn(user);
+        when(authorRepository.countAllAuthorsByLibraryIds(Set.of(9L))).thenReturn(7L);
+
+        assertThat(service.countAuthors()).isEqualTo(7L);
+        verify(authorRepository, never()).countAllAuthors();
+    }
+
+    @Test
     void getAllAuthors_nonAdminScopesToAssignedLibraries() {
         BookLoreUser.UserPermissions nonAdmin = new BookLoreUser.UserPermissions();
         nonAdmin.setAdmin(false);

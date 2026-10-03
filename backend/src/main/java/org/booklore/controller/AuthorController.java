@@ -53,6 +53,13 @@ public class AuthorController {
         return ResponseEntity.ok(authorMetadataService.getAllAuthors(safePageable));
     }
 
+    @Operation(summary = "Count authors", description = "Total authors visible to the caller, cached briefly for the sidebar badge.")
+    @ApiResponse(responseCode = "200", description = "Author count returned successfully")
+    @GetMapping("/count")
+    public ResponseEntity<Long> countAuthors() {
+        return ResponseEntity.ok(authorMetadataService.countAuthors());
+    }
+
     @Operation(summary = "Find author by name", description = "Find an author by exact name (case-insensitive).")
     @ApiResponse(responseCode = "200", description = "Author found successfully")
     @GetMapping("/by-name")

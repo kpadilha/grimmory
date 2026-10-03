@@ -223,25 +223,22 @@ export class AppSidebarComponent {
 
   private readonly homeCountsEnabled = computed(() =>
     this.authService.isAuthenticated() && this.layoutService.areSidebarCountsVisible('home'));
-  // Temporary: Using the /app/ endpoints until the new ones are ready. They work for now, easy enough to swap when ready.
+  // Server-cached totals (30 s per user): /app/{series,authors} re-aggregate the whole library on
+  // every refetch, ~1.4 s and ~1.1 s at 132k books.
   private readonly seriesCountQuery = injectQuery(() => ({
     queryKey: SERIES_COUNT_QUERY_KEY,
-    queryFn: () => this.entityCount('series'),
+    queryFn: () => lastValueFrom(this.http
+      .get<{page: {totalElements: number}}>(`${API_CONFIG.BASE_URL}/api/v1/books/series/summary`, {params: {page: 0, size: 1}})
+      .pipe(map(response => response.page.totalElements))),
     enabled: this.homeCountsEnabled(),
     ...QUERY_DEFAULTS,
   }));
   private readonly authorCountQuery = injectQuery(() => ({
     queryKey: AUTHOR_COUNT_QUERY_KEY,
-    queryFn: () => this.entityCount('authors'),
+    queryFn: () => lastValueFrom(this.http.get<number>(`${API_CONFIG.BASE_URL}/api/v1/authors/count`)),
     enabled: this.homeCountsEnabled(),
     ...QUERY_DEFAULTS,
   }));
-
-  private entityCount(entity: 'series' | 'authors'): Promise<number> {
-    return lastValueFrom(this.http
-      .get<{totalElements: number}>(`${API_CONFIG.BASE_URL}/api/v1/app/${entity}`, {params: {page: 0, size: 1}})
-      .pipe(map(response => response.totalElements)));
-  }
 
   readonly sections = computed<SidebarSection[]>(() => {
     this.activeLang();

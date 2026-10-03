@@ -1,5 +1,7 @@
 package org.booklore.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.exception.ApiError;
@@ -66,6 +68,23 @@ public class AuthorMetadataService {
     private final DuckDuckGoCoverService duckDuckGoCoverService;
     private final AuthenticationService authenticationService;
     private final AppSettingService appSettingService;
+
+    // The sidebar refetches this total every 30 s and on focus; the non-admin COUNT(DISTINCT) costs
+    // ~0.8 s at 132k books, so it gets SeriesSummaryService's 30 s per-user TTL.
+    private final Cache<Long, Long> authorCountCache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofSeconds(30))
+            .maximumSize(200)
+            .build();
+
+    /** Total authors visible to the caller, matching {@link #getAllAuthors}'s totalElements; cached 30 s per user. */
+    public long countAuthors() {
+        BookLoreUser user = authenticationService.getAuthenticatedUser();
+        return authorCountCache.get(user.getId(), id -> user.getPermissions().isAdmin()
+                ? authorRepository.countAllAuthors()
+                : authorRepository.countAllAuthorsByLibraryIds(user.getAssignedLibraries().stream()
+                        .map(Library::getId)
+                        .collect(Collectors.toSet())));
+    }
 
     public AuthorPage getAllAuthors(Pageable pageable) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
