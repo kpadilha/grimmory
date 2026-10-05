@@ -20,7 +20,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.*;
@@ -37,34 +36,18 @@ public class KoboLibrarySyncService {
     private final KoboDeletedBookProgressRepository koboDeletedBookProgressRepository;
     private final UserBookProgressRepository userBookProgressRepository;
     private final KoboServerProxy koboServerProxy;
-    private final ObjectMapper objectMapper;
     private final AppSettingService appSettingService;
 
+    // Store items reach the device verbatim: a typed round trip drops reading states, tags and unknown fields.
     private Collection<Entitlement> getEntitlementsFromKoboStoreResponse(ResponseEntity<JsonNode> koboStoreResponse) {
-         return Optional.ofNullable(koboStoreResponse.getBody())
-                .map(body -> {
-                    try {
-                        List<Entitlement> results = new ArrayList<>();
-                        if (body.isArray()) {
-                            for (JsonNode node : body) {
-                                if (node.has("NewEntitlement")) {
-                                    results.add(objectMapper.treeToValue(node, NewEntitlement.class));
-                                } else if (node.has("ChangedEntitlement")) {
-                                    results.add(objectMapper.treeToValue(node, ChangedEntitlement.class));
-                                } else {
-                                    log.warn("Unknown entitlement type in Kobo response: {}", node);
-                                }
-                            }
-                        }
-                        return results;
-                    } catch (Exception e) {
-                        log.error("Failed to map Kobo response to Entitlement objects", e);
-                        return Collections.<Entitlement>emptyList();
-                    }
-                })
-                .orElse(Collections.emptyList());
+        JsonNode body = koboStoreResponse.getBody();
+        if (body == null || !body.isArray()) {
+            return Collections.emptyList();
+        }
+        List<Entitlement> results = new ArrayList<>(body.size());
+        body.forEach(node -> results.add(new KoboStoreSyncItem(node)));
+        return results;
     }
-
 
     private boolean isForwardingToKoboStore() {
         return appSettingService.getAppSettings().getKoboSettings().isForwardToKoboStore();

@@ -1,11 +1,18 @@
 package org.booklore.service.kobo;
 
+import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.KoboSyncSettings;
+import org.booklore.model.dto.kobo.Entitlement;
+import org.booklore.model.dto.settings.AppSettings;
+import org.booklore.model.dto.settings.KoboSettings;
+import org.booklore.model.entity.KoboLibrarySnapshotEntity;
 import org.booklore.model.entity.UserBookProgressEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.repository.KoboDeletedBookProgressRepository;
 import org.booklore.repository.UserBookProgressRepository;
+import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.util.kobo.BookloreSyncTokenGenerator;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -16,11 +23,21 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.data.domain.Page;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -41,7 +58,7 @@ class KoboLibrarySyncServiceTest {
     @Mock
     private KoboServerProxy koboServerProxy;
     @Mock
-    private ObjectMapper objectMapper;
+    private AppSettingService appSettingService;
     @Mock
     private KoboSettingsService koboSettingsService;
 
@@ -54,6 +71,50 @@ class KoboLibrarySyncServiceTest {
     void setUp() {
         testSettings = new KoboSyncSettings();
         when(koboSettingsService.getCurrentUserSettings()).thenReturn(testSettings);
+    }
+
+    @Nested
+    @DisplayName("Kobo Store Forwarding")
+    class KoboStoreForwarding {
+
+        private final ObjectMapper mapper = JsonMapper.builder().build();
+
+        @AfterEach
+        void clearRequest() {
+            RequestContextHolder.resetRequestAttributes();
+        }
+
+        @Test
+        @DisplayName("Store sync items reach the device verbatim, whatever their type")
+        void storeItemsPassThroughVerbatim() {
+            String newEntitlement = """
+                    {"NewEntitlement":{"BookEntitlement":{"Id":"b1","Accessibility":"Full","ActivePeriod":{"From":"2026-01-01T00:00:00Z"}},"BookMetadata":{"Title":"Store Book","ExtraStoreField":[1,2]}}}""";
+            String changedReadingState = """
+                    {"ChangedReadingState":{"ReadingState":{"EntitlementId":"43ea0e6a-0000-0000-0000-000000000000","Created":"2026-02-06T22:47:44.0000000Z","LastModified":"2026-10-05T11:59:56.0000000Z","StatusInfo":{"LastModified":"2026-10-05T11:59:56.0000000Z","Status":"Reading","TimesStartedReading":1,"LastTimeStartedReading":"2026-10-05T11:00:00.0000000Z"},"Statistics":{"LastModified":"2026-10-05T11:59:56.0000000Z","SpentReadingMinutes":0,"RemainingTimeMinutes":958},"CurrentBookmark":{"LastModified":"2026-10-05T11:59:56.0000000Z","ProgressPercent":17,"ContentSourceProgressPercent":0,"Location":{"Value":"kobo.1.1","Type":"KoboSpan","Source":"OEBPS/Text/Secret-8.xhtml"}},"PriorityTimestamp":"2026-10-05T11:59:56.0000000Z"}}}""";
+            String newTag = """
+                    {"NewTag":{"Tag":{"Id":"t1","Name":"Store shelf","Type":"UserTag","Items":[{"RevisionId":"b1","Type":"ProductRevisionTagItem"}]}}}""";
+            JsonNode storeBody = mapper.readTree("[" + newEntitlement + "," + changedReadingState + "," + newTag + "]");
+
+            RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
+            KoboLibrarySnapshotEntity snapshot = new KoboLibrarySnapshotEntity();
+            snapshot.setId("snap-1");
+            when(koboLibrarySnapshotService.findByIdAndUserId(any(), any())).thenReturn(Optional.empty());
+            when(koboLibrarySnapshotService.create(1L)).thenReturn(snapshot);
+            when(koboLibrarySnapshotService.getUnsyncedBooks(any(), any())).thenReturn(Page.empty());
+            when(appSettingService.getAppSettings()).thenReturn(
+                    AppSettings.builder().koboSettings(KoboSettings.builder().forwardToKoboStore(true).build()).build());
+            when(koboServerProxy.proxyCurrentRequest(null, true)).thenReturn(ResponseEntity.ok(storeBody));
+            when(tokenGenerator.toBase64(any())).thenReturn("token");
+
+            ResponseEntity<List<Entitlement>> response = service.syncLibrary(BookLoreUser.builder().id(1L).build(), "t");
+
+            List<Entitlement> items = response.getBody();
+            assertNotNull(items);
+            assertEquals(3, items.size());
+            for (int i = 0; i < 3; i++) {
+                assertEquals(storeBody.get(i), mapper.readTree(mapper.writeValueAsString(items.get(i))));
+            }
+        }
     }
 
     @Nested
