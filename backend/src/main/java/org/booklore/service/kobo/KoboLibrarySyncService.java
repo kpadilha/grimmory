@@ -41,7 +41,7 @@ public class KoboLibrarySyncService {
     // Store items reach the device verbatim: a typed round trip drops reading states, tags and unknown fields.
     private Collection<Entitlement> getEntitlementsFromKoboStoreResponse(ResponseEntity<JsonNode> koboStoreResponse) {
         JsonNode body = koboStoreResponse.getBody();
-        if (body == null || !body.isArray()) {
+        if (!koboStoreResponse.getStatusCode().is2xxSuccessful() || body == null || !body.isArray()) {
             return Collections.emptyList();
         }
         List<Entitlement> results = new ArrayList<>(body.size());

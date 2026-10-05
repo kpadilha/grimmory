@@ -115,6 +115,27 @@ class KoboLibrarySyncServiceTest {
                 assertEquals(storeBody.get(i), mapper.readTree(mapper.writeValueAsString(items.get(i))));
             }
         }
+
+        @Test
+        @DisplayName("A failed store response contributes no sync items")
+        void storeErrorResponseIsNotRelayed() {
+            RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
+            KoboLibrarySnapshotEntity snapshot = new KoboLibrarySnapshotEntity();
+            snapshot.setId("snap-1");
+            when(koboLibrarySnapshotService.findByIdAndUserId(any(), any())).thenReturn(Optional.empty());
+            when(koboLibrarySnapshotService.create(1L)).thenReturn(snapshot);
+            when(koboLibrarySnapshotService.getUnsyncedBooks(any(), any())).thenReturn(Page.empty());
+            when(appSettingService.getAppSettings()).thenReturn(
+                    AppSettings.builder().koboSettings(KoboSettings.builder().forwardToKoboStore(true).build()).build());
+            when(koboServerProxy.proxyCurrentRequest(null, true))
+                    .thenReturn(ResponseEntity.status(502).body(mapper.readTree("[{\"NewTag\":{}}]")));
+            when(tokenGenerator.toBase64(any())).thenReturn("token");
+
+            ResponseEntity<List<Entitlement>> response = service.syncLibrary(BookLoreUser.builder().id(1L).build(), "t");
+
+            assertNotNull(response.getBody());
+            assertEquals(0, response.getBody().size());
+        }
     }
 
     @Nested
