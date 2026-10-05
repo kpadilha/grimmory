@@ -64,6 +64,7 @@ public class SeriesSummaryService {
 
     private final AuthenticationService authenticationService;
     private final BookFilterSpecifications filterSpecifications;
+    private final BrowseScopeFactory scopeFactory;
     private final BookRepository bookRepository;
     private final UserBookProgressRepository userBookProgressRepository;
 
@@ -80,9 +81,7 @@ public class SeriesSummaryService {
     public BrowsePage<SeriesSummary> getSeriesSummaries(int page, int size, String sort, String query, String status) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
         Long userId = user.getId();
-        boolean isAdmin = user.getPermissions().isAdmin();
-        Set<Long> libraryIds = BookFilterSpecifications.libraryIds(user);
-        Specification<BookEntity> base = filterSpecifications.base(null, Map.of(), FacetLogic.AND, userId, isAdmin, libraryIds, null);
+        Specification<BookEntity> base = filterSpecifications.base(null, Map.of(), FacetLogic.AND, scopeFactory.from(user), null);
 
         int pageNumber = Math.max(page, 0);
         int pageSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);

@@ -30,6 +30,7 @@ import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.UserBookProgressEntity;
 import org.booklore.model.enums.ReadStatus;
 import org.booklore.service.browse.BookFilterSpecifications;
+import org.booklore.service.browse.BrowseScopeFactory;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +57,7 @@ public class LibraryStatsService {
 
     private final AuthenticationService authenticationService;
     private final BookFilterSpecifications filterSpecifications;
+    private final BrowseScopeFactory scopeFactory;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -130,10 +132,7 @@ public class LibraryStatsService {
 
     private Specification<BookEntity> scope(Long libraryId) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
-        Long userId = user.getId();
-        boolean isAdmin = user.getPermissions().isAdmin();
-        Set<Long> libraryIds = BookFilterSpecifications.libraryIds(user);
-        Specification<BookEntity> base = filterSpecifications.base(null, Map.of(), null, userId, isAdmin, libraryIds, null);
+        Specification<BookEntity> base = filterSpecifications.base(null, Map.of(), null, scopeFactory.from(user), null);
         if (libraryId != null) {
             base = base.and((root, q, cb) -> cb.equal(root.get("library").get("id"), libraryId));
         }
