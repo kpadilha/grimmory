@@ -128,6 +128,7 @@ public class AuthorMetadataService {
                 .id(id)
                 .name(author.getName())
                 .asin(author.getAsin())
+                .openLibraryId(author.getOpenLibraryId())
                 .bookCount((int) bookCount)
                 .hasPhoto(authorIdsWithPhotos.contains(id))
                 .libraryNames(List.copyOf(enrichment.libraryNamesByAuthor.getOrDefault(id, Set.of())))
@@ -266,7 +267,8 @@ public class AuthorMetadataService {
             throw ApiError.GENERIC_BAD_REQUEST.createException("Unsupported author metadata source: " + request.getSource());
         }
 
-        AuthorSearchResult result = provider.getAuthorByAsin(request.getAsin(), request.getRegion());
+        String sourceId = request.getSource() == AuthorMetadataSource.OPENLIBRARY ? request.getOpenLibraryId() : request.getAsin();
+        AuthorSearchResult result = provider.getAuthorByAsin(sourceId, request.getRegion());
         if (result == null) {
             throw ApiError.GENERIC_BAD_REQUEST.createException("Failed to fetch author metadata");
         }
@@ -279,7 +281,7 @@ public class AuthorMetadataService {
         }
 
         auditService.log(AuditAction.AUTHOR_METADATA_UPDATED, "Author", authorId,
-                "Matched author '" + author.getName() + "' via " + result.getSource() + " (ASIN: " + result.getAsin() + ")");
+                "Matched author '" + author.getName() + "' via " + result.getSource() + " (" + sourceId(result) + ")");
 
         return toAuthorDetails(author);
     }
@@ -289,8 +291,10 @@ public class AuthorMetadataService {
         AuthorEntity author = authorRepository.findById(authorId)
                 .orElseThrow(() -> ApiError.AUTHOR_NOT_FOUND.createException(authorId));
 
+        // A query, not the lazy collection: auto-match calls this off the transactional proxy.
+        List<String> titles = authorRepository.findBookTitlesByAuthorId(authorId);
         for (AuthorParser provider : authorParserMap.values()) {
-            AuthorSearchResult result = provider.quickSearch(author.getName(), region);
+            AuthorSearchResult result = provider.quickSearch(author.getName(), region, titles);
             if (result != null) {
                 applyMetadataResult(author, result);
                 authorRepository.save(author);
@@ -300,7 +304,7 @@ public class AuthorMetadataService {
                 }
 
                 auditService.log(AuditAction.AUTHOR_METADATA_UPDATED, "Author", authorId,
-                        "Quick-matched author '" + author.getName() + "' via " + result.getSource() + " (ASIN: " + result.getAsin() + ")");
+                        "Quick-matched author '" + author.getName() + "' via " + result.getSource() + " (" + sourceId(result) + ")");
 
                 return toAuthorDetails(author);
             }
@@ -320,6 +324,7 @@ public class AuthorMetadataService {
                                     .id(details.getId())
                                     .name(details.getName())
                                     .asin(details.getAsin())
+                                    .openLibraryId(details.getOpenLibraryId())
                                     .hasPhoto(Files.exists(Paths.get(fileService.getAuthorThumbnailFile(authorId))))
                                     .build();
                         })
@@ -342,6 +347,7 @@ public class AuthorMetadataService {
 
             author.setDescription(null);
             author.setAsin(null);
+            author.setOpenLibraryId(null);
             authorRepository.save(author);
             fileService.deleteAuthorImages(authorId);
 
@@ -516,12 +522,21 @@ public class AuthorMetadataService {
     }
 
     private void applyMetadataResult(AuthorEntity author, AuthorSearchResult result) {
-        if (!author.isDescriptionLocked()) {
+        // OpenLibrary records often lack a bio; a match must not erase the one the author already has.
+        if (!author.isDescriptionLocked() && result.getDescription() != null) {
             author.setDescription(result.getDescription());
         }
-        if (!author.isAsinLocked()) {
+        if (result.getSource() == AuthorMetadataSource.OPENLIBRARY) {
+            author.setOpenLibraryId(result.getOpenLibraryId());
+        } else if (!author.isAsinLocked()) {
             author.setAsin(result.getAsin());
         }
+    }
+
+    private static String sourceId(AuthorSearchResult result) {
+        return result.getSource() == AuthorMetadataSource.OPENLIBRARY
+                ? "OLID: " + result.getOpenLibraryId()
+                : "ASIN: " + result.getAsin();
     }
 
     private AuthorDetails toAuthorDetails(AuthorEntity author) {
@@ -530,6 +545,7 @@ public class AuthorMetadataService {
                 .name(author.getName())
                 .description(author.getDescription())
                 .asin(author.getAsin())
+                .openLibraryId(author.getOpenLibraryId())
                 .nameLocked(author.isNameLocked())
                 .descriptionLocked(author.isDescriptionLocked())
                 .asinLocked(author.isAsinLocked())

@@ -214,4 +214,41 @@ class AudnexusAuthorParserTest {
         String uri = requestCaptor.getValue().uri().toString();
         assertThat(uri).isEqualTo("https://api.audnex.us/authors/FOOBAR?region=us%26uk");
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void quickSearch_skipsFuzzyHitsAndPicksTheExactName() throws Exception {
+        HttpResponse<String> search = mock(HttpResponse.class);
+        when(search.statusCode()).thenReturn(200);
+        when(search.body()).thenReturn("""
+                [{"asin": "B07Q8QS2G1", "name": "C. C. Mitchell"}, {"asin": "B0COBBLE01", "name": "A.C. Cobble"}]""");
+        HttpResponse<String> detail = mock(HttpResponse.class);
+        when(detail.statusCode()).thenReturn(200);
+        when(detail.body()).thenReturn("{\"asin\":\"B0COBBLE01\",\"name\":\"A.C. Cobble\"}");
+        doReturn(search).doReturn(detail).when(httpClient).send(any(HttpRequest.class), any());
+
+        AuthorSearchResult result = parser.quickSearch("A C Cobble", "us", List.of());
+
+        assertThat(result.getAsin()).isEqualTo("B0COBBLE01");
+        ArgumentCaptor<HttpRequest> requests = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(httpClient, times(2)).send(requests.capture(), any());
+        assertThat(requests.getAllValues().get(1).uri().getPath()).isEqualTo("/authors/B0COBBLE01");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void quickSearch_triesInitialSpellingsThenGivesUp() throws Exception {
+        HttpResponse<String> search = mock(HttpResponse.class);
+        when(search.statusCode()).thenReturn(200);
+        when(search.body()).thenReturn("""
+                [{"asin": "B00OA0ZZUG", "name": "C C Humphreys"}, {"asin": "B001K7SKO0", "name": "C. C. Benison"}]""");
+        doReturn(search).when(httpClient).send(any(HttpRequest.class), any());
+
+        assertThat(parser.quickSearch("A C Cobble", "us", List.of())).isNull();
+
+        ArgumentCaptor<HttpRequest> requests = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(httpClient, times(3)).send(requests.capture(), any());
+        assertThat(requests.getAllValues()).extracting(r -> r.uri().getQuery())
+                .containsExactly("name=A C Cobble&region=us", "name=A.C. Cobble&region=us", "name=A. C. Cobble&region=us");
+    }
 }

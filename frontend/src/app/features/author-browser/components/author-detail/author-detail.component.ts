@@ -158,6 +158,7 @@ export class AuthorDetailComponent implements OnInit, AfterViewChecked {
     this.authorService.patchAuthorInCache(updatedAuthor.id, {
       name: updatedAuthor.name,
       asin: updatedAuthor.asin,
+      openLibraryId: updatedAuthor.openLibraryId,
       hasPhoto: true,
     });
   }

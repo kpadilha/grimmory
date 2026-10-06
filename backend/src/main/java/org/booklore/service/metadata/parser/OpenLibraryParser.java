@@ -231,7 +231,8 @@ public class OpenLibraryParser implements BookParser {
         }
     }
 
-    private <T> T sendRequest(HttpRequest request, Class<T> tClass) throws InterruptedException {
+    // Package-private so OpenLibraryAuthorParser shares this User-Agent and the one 160 req/min budget.
+    <T> T sendRequest(HttpRequest request, Class<T> tClass) throws InterruptedException {
         request = HttpRequest.newBuilder(request, (n, v) -> !n.equalsIgnoreCase("User-Agent"))
                 .header("User-Agent", USER_AGENT)
                 .build();

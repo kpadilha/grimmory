@@ -67,7 +67,7 @@
         <span>{{ t('resultsFound', {count: results().length}) }}</span>
       </div>
       <div class="results-list">
-        @for (result of results(); track result.asin) {
+        @for (result of results(); track result.source + (result.asin ?? result.openLibraryId)) {
           <div class="result-card">
             <div class="result-image">
               @if (result.imageUrl) {
@@ -80,7 +80,11 @@
             </div>
             <div class="result-info">
               <h4 class="result-name">{{ result.name }}</h4>
-              <span class="result-asin">ASIN: {{ result.asin }}</span>
+              @if (result.asin) {
+                <span class="result-asin">ASIN: {{ result.asin }}</span>
+              } @else {
+                <span class="result-asin">OpenLibrary: {{ result.openLibraryId }}</span>
+              }
               @if (result.description) {
                 <p class="result-description">{{ result.description }}</p>
               }

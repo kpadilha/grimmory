@@ -24,6 +24,9 @@ public interface AuthorRepository extends JpaRepository<AuthorEntity, Long> {
 
     Optional<AuthorEntity> findByAsin(String asin);
 
+    @Query("SELECT bm.title FROM AuthorEntity a JOIN a.bookMetadataEntityList bm WHERE a.id = :authorId AND bm.title IS NOT NULL")
+    List<String> findBookTitlesByAuthorId(@Param("authorId") Long authorId);
+
     // Ordered and paged in the query itself (LIMIT/OFFSET pushed to the DB) - never the whole table.
     @Query("SELECT a, COUNT(bm) FROM AuthorEntity a LEFT JOIN a.bookMetadataEntityList bm GROUP BY a ORDER BY a.name")
     List<Object[]> findAllWithBookCount(Pageable pageable);

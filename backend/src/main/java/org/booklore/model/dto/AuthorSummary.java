@@ -18,6 +18,7 @@ public class AuthorSummary {
     private Long id;
     private String name;
     private String asin;
+    private String openLibraryId;
     private int bookCount;
     private boolean hasPhoto;
     // Bulk-aggregated per page (see AuthorRepository), never per-author loops - keeps the

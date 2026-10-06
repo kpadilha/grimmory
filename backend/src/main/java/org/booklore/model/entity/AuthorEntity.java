@@ -39,6 +39,9 @@ public class AuthorEntity {
     @Column(name = "asin", length = 20)
     private String asin;
 
+    @Column(name = "openlibrary_id", length = 20)
+    private String openLibraryId;
+
     @Column(name = "name_locked", nullable = false)
     private boolean nameLocked;
 

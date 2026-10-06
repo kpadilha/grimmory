@@ -11,7 +11,7 @@ import {TranslocoDirective, TranslocoPipe, TranslocoService} from '@jsverse/tran
 import {RouteScrollPositionService} from '../../../../shared/service/route-scroll-position.service';
 import {MessageService} from '@openng/optimus-ui/api';
 import {AuthorService} from '../../service/author.service';
-import {AuthorSummary, EnrichedAuthor, AuthorFilters, DEFAULT_AUTHOR_FILTERS, enrichAuthor} from '../../model/author.model';
+import {AuthorSummary, EnrichedAuthor, AuthorFilters, DEFAULT_AUTHOR_FILTERS, enrichAuthor, isAuthorMatched} from '../../model/author.model';
 import {AuthorCardComponent} from '../author-card/author-card.component';
 import {AuthorSelectionService, AuthorCheckboxClickEvent} from '../../service/author-selection.service';
 import {PageTitleService} from '../../../../shared/service/page-title.service';
@@ -365,7 +365,7 @@ export class AuthorBrowserComponent implements OnInit {
       next: (matched) => {
         this.thumbnailCacheBusters.set(matched.id, Date.now());
         this.allAuthorsState.update(current => (current ?? []).map(author => author.id === matched.id
-          ? {...author, asin: matched.asin, hasPhoto: matched.hasPhoto}
+          ? {...author, asin: matched.asin, openLibraryId: matched.openLibraryId, hasPhoto: matched.hasPhoto}
           : author
         ));
       },
@@ -418,8 +418,8 @@ export class AuthorBrowserComponent implements OnInit {
 
   private applyFilters(authors: EnrichedAuthor[], filters: AuthorFilters): EnrichedAuthor[] {
     return authors.filter(a => {
-      if (filters.matchStatus === 'matched' && !a.asin) return false;
-      if (filters.matchStatus === 'unmatched' && a.asin) return false;
+      if (filters.matchStatus === 'matched' && !isAuthorMatched(a)) return false;
+      if (filters.matchStatus === 'unmatched' && isAuthorMatched(a)) return false;
 
       if (filters.photoStatus === 'has-photo' && !a.hasPhoto) return false;
       if (filters.photoStatus === 'no-photo' && a.hasPhoto) return false;
@@ -465,8 +465,8 @@ export class AuthorBrowserComponent implements OnInit {
         return sorted.sort((a, b) => dir * (a.bookCount - b.bookCount));
       case 'matched':
         return sorted.sort((a, b) => {
-          const aVal = a.asin ? 1 : 0;
-          const bVal = b.asin ? 1 : 0;
+          const aVal = isAuthorMatched(a) ? 1 : 0;
+          const bVal = isAuthorMatched(b) ? 1 : 0;
           if (aVal !== bVal) return dir * (aVal - bVal);
           return a.name.localeCompare(b.name);
         });

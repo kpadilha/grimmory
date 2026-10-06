@@ -97,6 +97,7 @@ export class AuthorMatchComponent implements OnInit {
     const request: AuthorMatchRequest = {
       source: result.source,
       asin: result.asin,
+      openLibraryId: result.openLibraryId,
       region: this.selectedRegion()
     };
 

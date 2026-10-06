@@ -83,13 +83,23 @@ public class AudnexusAuthorParser implements AuthorParser {
     }
 
     @Override
-    public AuthorSearchResult quickSearch(String name, String region) {
+    public AuthorSearchResult quickSearch(String name, String region, Collection<String> bookTitles) {
+        // Audnexus ranks by fuzzy similarity and drops initials ("A C Cobble" returns only C. C. authors).
+        for (String query : AuthorNameMatcher.queryVariants(name)) {
+            Optional<String> asin = findMatchingAsin(name, query, region);
+            if (asin.isPresent()) return getAuthorByAsin(asin.get(), region);
+        }
+        return null;
+    }
+
+    /** First ASIN whose name matches ours; empty when none does or the search failed. */
+    private Optional<String> findMatchingAsin(String name, String query, String region) {
         try {
             waitForRateLimit();
 
             URI uri = UriComponentsBuilder.fromUriString(BASE_URL)
                     .path(PATH_AUTHORS)
-                    .queryParam("name", name)
+                    .queryParam("name", query)
                     .queryParam("region", region)
                     .build()
                     .toUri();
@@ -105,18 +115,20 @@ public class AudnexusAuthorParser implements AuthorParser {
 
             if (response.statusCode() == 200) {
                 AudnexusAuthorResponse[] authors = objectMapper.readValue(response.body(), AudnexusAuthorResponse[].class);
-                if (authors.length == 0) return null;
-                return getAuthorByAsin(authors[0].getAsin(), region);
+                return Arrays.stream(authors)
+                        .filter(author -> author.getAsin() != null && AuthorNameMatcher.matches(name, author.getName()))
+                        .map(AudnexusAuthorResponse::getAsin)
+                        .findFirst();
             }
 
             log.warn("Audnexus author quick search returned status {}", response.statusCode());
-            return null;
+            return Optional.empty();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return null;
+            return Optional.empty();
         } catch (Exception e) {
-            log.error("Audnexus author quick search failed for name: {}", name, e);
-            return null;
+            log.error("Audnexus author quick search failed for name: {}", query, e);
+            return Optional.empty();
         }
     }
 

@@ -2,6 +2,7 @@ package org.booklore.service.metadata.parser;
 
 import org.booklore.model.dto.AuthorSearchResult;
 
+import java.util.Collection;
 import java.util.List;
 
 public interface AuthorParser {
@@ -10,5 +11,6 @@ public interface AuthorParser {
 
     AuthorSearchResult getAuthorByAsin(String asin, String region);
 
-    AuthorSearchResult quickSearch(String name, String region);
+    /** The provider's author whose name matches ours exactly, or null; never a closest-looking guess. */
+    AuthorSearchResult quickSearch(String name, String region, Collection<String> bookTitles);
 }

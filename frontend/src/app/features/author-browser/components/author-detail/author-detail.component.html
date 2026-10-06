@@ -59,6 +59,14 @@
                       <p-tag value="Audible" severity="warn"></p-tag>
                     </a>
                   }
+                  @if (author.openLibraryId) {
+                    <a [href]="'https://openlibrary.org/authors/' + author.openLibraryId"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       class="asin-link">
+                      <p-tag value="OpenLibrary" severity="secondary"></p-tag>
+                    </a>
+                  }
                   @if (canEditMetadata) {
                     <p-button
                       [icon]="quickMatching ? 'pi pi-spin pi-spinner' : 'pi pi-bolt'"

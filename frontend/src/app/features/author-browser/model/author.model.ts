@@ -4,6 +4,7 @@ export interface AuthorSummary {
   id: number;
   name: string;
   asin?: string;
+  openLibraryId?: string;
   bookCount: number;
   hasPhoto: boolean;
   libraryNames: string[];
@@ -14,6 +15,10 @@ export interface AuthorSummary {
   readCount: number;
   inProgressCount: number;
   avgPersonalRating: number | null;
+}
+
+export function isAuthorMatched(author: {asin?: string; openLibraryId?: string}): boolean {
+  return !!(author.asin || author.openLibraryId);
 }
 
 export interface AuthorPageResponse {
@@ -73,6 +78,7 @@ export interface AuthorDetails {
   name: string;
   description?: string;
   asin?: string;
+  openLibraryId?: string;
   nameLocked: boolean;
   descriptionLocked: boolean;
   asinLocked: boolean;
@@ -81,7 +87,8 @@ export interface AuthorDetails {
 
 export interface AuthorSearchResult {
   source: string;
-  asin: string;
+  asin?: string;
+  openLibraryId?: string;
   name: string;
   description?: string;
   imageUrl?: string;
@@ -89,7 +96,8 @@ export interface AuthorSearchResult {
 
 export interface AuthorMatchRequest {
   source: string;
-  asin: string;
+  asin?: string;
+  openLibraryId?: string;
   region: string;
 }
 

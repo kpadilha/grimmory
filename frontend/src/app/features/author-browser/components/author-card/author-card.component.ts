@@ -6,7 +6,7 @@ import {FormsModule} from '@angular/forms';
 import {TieredMenu} from '@openng/optimus-ui/tieredmenu';
 import {Button} from '@openng/optimus-ui/button';
 import {MenuItem, MessageService} from '@openng/optimus-ui/api';
-import {AuthorSummary} from '../../model/author.model';
+import {AuthorSummary, isAuthorMatched} from '../../model/author.model';
 import {AuthorService} from '../../service/author.service';
 
 @Component({
@@ -49,7 +49,7 @@ export class AuthorCardComponent implements OnChanges {
     if (changes['author']) {
       const prev = changes['author'].previousValue as AuthorSummary | undefined;
       const curr = changes['author'].currentValue as AuthorSummary;
-      if (!prev || prev.id !== curr.id || prev.hasPhoto !== curr.hasPhoto || prev.asin !== curr.asin) {
+      if (!prev || prev.id !== curr.id || prev.hasPhoto !== curr.hasPhoto || prev.asin !== curr.asin || prev.openLibraryId !== curr.openLibraryId) {
         this.hasPhoto = curr.hasPhoto;
       }
     }
@@ -63,7 +63,7 @@ export class AuthorCardComponent implements OnChanges {
   }
 
   get isMatched(): boolean {
-    return !!this.author.asin;
+    return isAuthorMatched(this.author);
   }
 
   onCardClick(event: Event): void {
@@ -154,7 +154,7 @@ export class AuthorCardComponent implements OnChanges {
     this.authorService.quickMatchAuthor(this.author.id).subscribe({
       next: (updated) => {
         this.quickMatching = false;
-        this.author = {...this.author, asin: updated.asin, hasPhoto: true};
+        this.author = {...this.author, asin: updated.asin, openLibraryId: updated.openLibraryId, hasPhoto: true};
         this.hasPhoto = true;
         this.menuInitialized = false;
         this.quickMatched.emit(this.author);
