@@ -310,7 +310,8 @@ public class AuthorMetadataService {
                 .concatMap(authorId ->
                         Mono.fromCallable(() -> {
                             AuthorEntity author = authorRepository.findById(authorId).orElse(null);
-                            if (author == null) return null;
+                            // Bulk auto-match fills unmatched authors only; replacing a match is a manual action.
+                            if (author == null || author.getAsin() != null || author.getOpenLibraryId() != null) return null;
                             AuthorDetails details = quickMatchAuthor(authorId, "us");
                             return AuthorSummary.builder()
                                     .id(details.getId())
@@ -408,6 +409,7 @@ public class AuthorMetadataService {
             }
             fileService.saveAuthorImages(image, authorId);
             image.flush();
+            lockPhoto(author);
         } catch (IOException e) {
             throw ApiError.FILE_READ_ERROR.createException(e.getMessage());
         }
@@ -421,11 +423,18 @@ public class AuthorMetadataService {
         if (request.getName() != null) {
             author.rename(request.getName());
         }
+        // Hand edits are user data; locking them keeps a later re-match from overwriting or clearing them.
+        boolean descriptionEdited = false;
+        boolean asinEdited = false;
         if (request.getDescription() != null) {
-            author.setDescription(request.getDescription().isBlank() ? null : request.getDescription());
+            String description = request.getDescription().isBlank() ? null : request.getDescription();
+            descriptionEdited = description != null && !description.equals(author.getDescription());
+            author.setDescription(description);
         }
         if (request.getAsin() != null) {
-            author.setAsin(request.getAsin().isBlank() ? null : request.getAsin());
+            String asin = request.getAsin().isBlank() ? null : request.getAsin();
+            asinEdited = asin != null && !asin.equals(author.getAsin());
+            author.setAsin(asin);
         }
         if (request.getNameLocked() != null) {
             author.setNameLocked(request.getNameLocked());
@@ -438,6 +447,13 @@ public class AuthorMetadataService {
         }
         if (request.getPhotoLocked() != null) {
             author.setPhotoLocked(request.getPhotoLocked());
+        }
+
+        if (descriptionEdited) {
+            author.setDescriptionLocked(true);
+        }
+        if (asinEdited) {
+            author.setAsinLocked(true);
         }
 
         authorRepository.save(author);
@@ -460,6 +476,13 @@ public class AuthorMetadataService {
                 .orElseThrow(() -> ApiError.AUTHOR_NOT_FOUND.createException(authorId));
 
         fileService.createAuthorThumbnailFromUrl(authorId, imageUrl);
+        lockPhoto(author);
+    }
+
+    // A photo the user chose is user data: a later re-match must not replace or delete it.
+    private void lockPhoto(AuthorEntity author) {
+        author.setPhotoLocked(true);
+        authorRepository.save(author);
     }
 
     public AuthorDetails getAuthorByName(String name) {
@@ -515,6 +538,13 @@ public class AuthorMetadataService {
 
     /** Replaces any previous match: its other-provider id, bio and photo go unless locked, so a re-match never mixes two authors. */
     private void applyMetadataResult(AuthorEntity author, AuthorSearchResult result) {
+        boolean lockedToAnotherAuthor = author.isAsinLocked() && author.getAsin() != null
+                && !(result.getSource() == AuthorMetadataSource.AUDNEXUS && author.getAsin().equals(result.getAsin()));
+        if (lockedToAnotherAuthor) {
+            log.info("Author {} keeps locked ASIN {}; not importing {} data from a different author",
+                    author.getId(), author.getAsin(), result.getSource());
+            return;
+        }
         boolean previouslyMatched = author.getAsin() != null || author.getOpenLibraryId() != null;
         if (result.getSource() == AuthorMetadataSource.OPENLIBRARY) {
             author.setOpenLibraryId(result.getOpenLibraryId());

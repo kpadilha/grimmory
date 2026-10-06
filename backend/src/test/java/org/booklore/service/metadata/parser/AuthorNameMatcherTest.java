@@ -47,6 +47,10 @@ class AuthorNameMatcherTest {
         assertThat(AuthorNameMatcher.queryVariants("A C Cobble"))
                 .containsExactly("A C Cobble", "A.C. Cobble", "A. C. Cobble");
         assertThat(AuthorNameMatcher.queryVariants("Brandon Sanderson")).containsExactly("Brandon Sanderson");
+        assertThat(AuthorNameMatcher.queryVariants("AC Cobble"))
+                .containsExactly("AC Cobble", "A.C. Cobble", "A. C. Cobble");
+        assertThat(AuthorNameMatcher.queryVariants("Rowling, J.K."))
+                .containsExactly("Rowling, J.K.", "J.K. Rowling", "J. K. Rowling");
     }
 
     @Test

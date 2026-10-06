@@ -91,11 +91,13 @@ public final class AuthorNameMatcher {
     public static List<String> queryVariants(String name) {
         Set<String> variants = new LinkedHashSet<>();
         variants.add(name.strip());
-        String[] tokens = fold(name).split(" ");
+        Name parsed = parse(name);
+        String[] tokens = parsed.base().split(" ");
         int initials = 0;
         while (initials < tokens.length - 1 && tokens[initials].length() == 1) initials++;
         if (initials > 0) {
-            String rest = String.join(" ", List.of(tokens).subList(initials, tokens.length));
+            String rest = String.join(" ", List.of(tokens).subList(initials, tokens.length))
+                    + (parsed.suffix().isEmpty() ? "" : " " + parsed.suffix());
             List<String> letters = List.of(tokens).subList(0, initials).stream()
                     .map(t -> t.toUpperCase(Locale.ROOT) + ".").toList();
             variants.add(capitalise(String.join("", letters) + " " + rest));

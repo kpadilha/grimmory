@@ -9,6 +9,7 @@ import org.booklore.model.dto.AuthorSummary;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
 import org.booklore.model.dto.request.AuthorMatchRequest;
+import org.booklore.model.dto.request.AuthorUpdateRequest;
 import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.enums.AuditAction;
 import org.booklore.model.enums.AuthorMetadataSource;
@@ -519,7 +520,7 @@ class AuthorMetadataServiceTest {
         author.setOpenLibraryId(openLibraryId);
         author.setDescription("Previous match's bio");
         when(authorRepository.findById(1L)).thenReturn(Optional.of(author));
-        when(authorRepository.save(any(AuthorEntity.class))).thenAnswer(i -> i.getArgument(0));
+        lenient().when(authorRepository.save(any(AuthorEntity.class))).thenAnswer(i -> i.getArgument(0));
         return author;
     }
 
@@ -588,5 +589,90 @@ class AuthorMetadataServiceTest {
 
         assertThat(author.getDescription()).isEqualTo("Previous match's bio");
         verify(fileService, never()).deleteAuthorImages(anyLong());
+    }
+
+    @Test
+    void photoChosenByUserSurvivesRematch() {
+        AuthorEntity author = matchedAuthor("B07Q8QS2G1", null);
+        service.uploadAuthorPhotoFromUrl(1L, "https://example.com/mine.jpg");
+        when(openLibraryParser.getAuthorByAsin("OL9828296A", "us")).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.OPENLIBRARY).openLibraryId("OL9828296A").name("A. C. Cobble").build());
+
+        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.OPENLIBRARY, "OL9828296A"));
+
+        assertThat(author.isPhotoLocked()).isTrue();
+        verify(fileService, never()).deleteAuthorImages(anyLong());
+    }
+
+    @Test
+    void editedBioAndAsinSurviveRematch() {
+        AuthorEntity author = matchedAuthor("B07Q8QS2G1", null);
+        AuthorUpdateRequest edit = new AuthorUpdateRequest();
+        edit.setDescription("My own notes");
+        edit.setAsin("B0COBBLE01");
+        edit.setDescriptionLocked(false);
+        edit.setAsinLocked(false);
+        service.updateAuthor(1L, edit);
+        when(openLibraryParser.getAuthorByAsin("OL9828296A", "us")).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.OPENLIBRARY).openLibraryId("OL9828296A").name("A. C. Cobble").build());
+
+        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.OPENLIBRARY, "OL9828296A"));
+
+        assertThat(author.getDescription()).isEqualTo("My own notes");
+        assertThat(author.getAsin()).isEqualTo("B0COBBLE01");
+    }
+
+    @Test
+    void lockedAsinOfAnotherAuthorBlocksImport() {
+        AuthorEntity author = matchedAuthor("B0COBBLE01", null);
+        author.setAsinLocked(true);
+        when(authorParser.getAuthorByAsin("B07Q8QS2G1", "us")).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.AUDNEXUS).asin("B07Q8QS2G1").name("C. C. Mitchell")
+                .description("Someone else").imageUrl("https://example.com/mitchell.jpg").build());
+
+        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.AUDNEXUS, "B07Q8QS2G1"));
+
+        assertThat(author.getAsin()).isEqualTo("B0COBBLE01");
+        assertThat(author.getDescription()).isEqualTo("Previous match's bio");
+        verify(fileService, never()).createAuthorThumbnailFromUrl(anyLong(), anyString());
+        verify(fileService, never()).deleteAuthorImages(anyLong());
+    }
+
+    @Test
+    void autoMatchSkipsAlreadyMatchedAuthors() {
+        matchedAuthor(null, "OL9828296A");
+
+        assertThat(service.autoMatchAuthors(List.of(1L)).collectList().block()).isEmpty();
+
+        verifyNoInteractions(authorParser, openLibraryParser);
+    }
+
+    @Test
+    void quickMatchDownloadsTheMatchedPhoto() {
+        AuthorEntity author = new AuthorEntity();
+        author.setId(1L);
+        author.setName("A C Cobble");
+        when(authorRepository.findById(1L)).thenReturn(Optional.of(author));
+        when(authorParser.quickSearch(eq("A C Cobble"), eq("us"), any())).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.AUDNEXUS).asin("B0COBBLE01").name("A.C. Cobble")
+                .imageUrl("https://example.com/cobble.jpg").build());
+
+        service.quickMatchAuthor(1L, "us");
+
+        assertThat(author.getAsin()).isEqualTo("B0COBBLE01");
+        verify(fileService).createAuthorThumbnailFromUrl(1L, "https://example.com/cobble.jpg");
+        verify(fileService, never()).deleteAuthorImages(anyLong());
+    }
+
+    @Test
+    void quickRematchWithoutPhotoDropsThePreviousPhoto() {
+        AuthorEntity author = matchedAuthor("B07Q8QS2G1", null);
+        when(openLibraryParser.quickSearch(eq("A C Cobble"), eq("us"), any())).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.OPENLIBRARY).openLibraryId("OL9828296A").name("A. C. Cobble").build());
+
+        service.quickMatchAuthor(1L, "us");
+
+        assertThat(author.getAsin()).isNull();
+        verify(fileService).deleteAuthorImages(1L);
     }
 }
