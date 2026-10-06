@@ -283,7 +283,8 @@ class AuthorMetadataServiceTest {
     void getAllAuthors_paginatesInsteadOfLoadingTheWholeTable() {
         Pageable pageable = PageRequest.of(2, 50);
         AuthorEntity author = authorEntity(1L, "Author One", null);
-        when(authorRepository.findAllWithBookCount(pageable)).thenReturn(Collections.singletonList(new Object[]{author, 3L}));
+        // SIZE() in the repository query yields an Integer count, not COUNT()'s Long.
+        when(authorRepository.findAllWithBookCount(pageable)).thenReturn(Collections.singletonList(new Object[]{author, 3}));
         when(authorRepository.countAllAuthors()).thenReturn(48_620L);
         stubEmptyEnrichment(Set.of(1L));
         when(fileService.listAuthorIdsWithPhotos()).thenReturn(Set.of());

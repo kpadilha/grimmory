@@ -115,7 +115,7 @@ public class AuthorMetadataService {
         PageEnrichment enrichment = loadPageEnrichment(authorIds, user.getId(), libraryIds);
 
         List<AuthorSummary> summaries = rows.stream()
-                .map(row -> toSummary((AuthorEntity) row[0], (Long) row[1], authorIdsWithPhotos, enrichment))
+                .map(row -> toSummary((AuthorEntity) row[0], ((Number) row[1]).longValue(), authorIdsWithPhotos, enrichment))
                 .toList();
 
         return AuthorPage.builder().content(summaries).totalElements(total).build();
