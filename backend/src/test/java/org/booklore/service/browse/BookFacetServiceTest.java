@@ -387,18 +387,20 @@ class BookFacetServiceTest {
         assertThat(count(group(facetService.getFacets(null, null, null), "author"), "Alice")).isEqualTo(2L);
     }
 
+    // Clients show values in the DB collation's order, which no JDK collator reproduces; the
+    // expected order is whatever this database's ORDER BY yields, so an in-memory re-sort fails here.
     @Test
-    void getFacetValueBookIdsOrdersValuesAlphabeticallyIgnoringCaseAndAccents() {
-        book("A", "Zed", "Alice");
-        book("B", "Émile", "Alice");
-        book("C", "beta", "Alice");
-        book("D", "Alpha", "Alice");
+    void getFacetValueBookIdsKeepsTheDatabaseCollationOrder() {
+        List<String> names = List.of("Zed", "Émile", "beta", "Alpha", "a b", "ab");
+        names.forEach(name -> book(name, name, "Alice"));
         em.flush();
+        List<String> databaseOrder = em.createQuery(
+                        "SELECT c.name FROM CategoryEntity c WHERE c.name IN :names ORDER BY c.name", String.class)
+                .setParameter("names", names).getResultList();
 
         List<org.booklore.model.dto.browse.FacetValueBookIds> genre = facetService.getFacetValueBookIds(List.of("genre")).get("genre");
 
-        assertThat(genre).extracting(org.booklore.model.dto.browse.FacetValueBookIds::value)
-                .containsExactly("Alpha", "beta", "Émile", "Zed");
+        assertThat(genre).extracting(org.booklore.model.dto.browse.FacetValueBookIds::value).containsExactlyElementsOf(databaseOrder);
     }
 
     @Test

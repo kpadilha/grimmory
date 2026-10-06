@@ -31,14 +31,11 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.text.Collator;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -191,28 +188,15 @@ public class BookFacetService {
 
         cq.multiselect(value.alias("value"), root.get("id").alias("bookId"));
         cq.where(predicates.toArray(Predicate[]::new));
+        // Kept in SQL: only the DB collation gives the order clients show, which no JDK collator matches.
+        cq.orderBy(cb.asc(value));
 
-        // Grouped first, then sorted per distinct value: an SQL ORDER BY multi-pass filesorted every
-        // (value, book) row and re-read each wide book_metadata row.
-        Map<Object, List<Long>> grouped = new HashMap<>();
+        Map<String, List<Long>> grouped = new LinkedHashMap<>();
         for (Tuple tuple : entityManager.createQuery(cq).getResultList()) {
-            grouped.computeIfAbsent(tuple.get("value"), k -> new ArrayList<>()).add(((Number) tuple.get("bookId")).longValue());
+            String key = String.valueOf(tuple.get("value"));
+            grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(((Number) tuple.get("bookId")).longValue());
         }
-        Collator collator = Collator.getInstance(Locale.ROOT);
-        return grouped.entrySet().stream()
-                .sorted((a, b) -> compareValues(a.getKey(), b.getKey(), collator))
-                .map(e -> new FacetValueBookIds(String.valueOf(e.getKey()), e.getValue()))
-                .toList();
-    }
-
-    // Text in locale order like the DB collation, exact order breaking collator ties; other types natural.
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static int compareValues(Object a, Object b, Collator collator) {
-        if (a instanceof String x && b instanceof String y) {
-            int byLocale = collator.compare(x, y);
-            return byLocale != 0 ? byLocale : x.compareTo(y);
-        }
-        return ((Comparable) a).compareTo(b);
+        return grouped.entrySet().stream().map(e -> new FacetValueBookIds(e.getKey(), e.getValue())).toList();
     }
 
     private List<FacetResponseBuilder.FacetCount> count(FacetDef def, Specification<BookEntity> base, BrowseScope scope) {
