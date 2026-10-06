@@ -196,6 +196,12 @@ public class AppBookSpecification {
         };
     }
 
+    /** True when a to-many attribute join under {@code from} can repeat the root row. */
+    public static boolean hasCollectionJoin(From<?, ?> from) {
+        return from.getJoins().stream().anyMatch(join ->
+                join.getAttribute().isCollection() || hasCollectionJoin(join));
+    }
+
     public static Specification<BookEntity> notDeleted() {
         return (root, query, cb) -> cb.or(
                 cb.isNull(root.get("deleted")),

@@ -1,6 +1,5 @@
 package org.booklore.service.book;
 
-import jakarta.persistence.criteria.From;
 import lombok.RequiredArgsConstructor;
 import org.booklore.app.specification.AppBookSpecification;
 import org.booklore.mapper.v2.BookMapperV2;
@@ -48,9 +47,9 @@ public class BookQueryService {
         return mapBooksToDto(books, includeDescription, userId, StripForListView);
     }
 
+    /** Admin listing: pages over ids, then hydrates only that page - a wide-row OFFSET scan does not. */
     public Page<Book> getAllBooksPaged(Pageable pageable) {
-        Page<BookEntity> page = bookRepository.findAllWithMetadataPage(pageable);
-        return page.map(book -> mapBookToDto(book, false, null, true));
+        return findBooksPaged(AppBookSpecification.notDeleted(), pageable, null);
     }
 
     public Page<Book> getAllBooksByLibraryIdsPaged(Collection<Long> libraryIds, Long userId, Pageable pageable) {
@@ -60,14 +59,9 @@ public class BookQueryService {
     private Specification<BookEntity> distinct(Specification<BookEntity> filter) {
         return (root, query, cb) -> {
             var predicate = filter.toPredicate(root, query, cb);
-            query.distinct(query.isDistinct() || hasCollectionJoin(root));
+            query.distinct(query.isDistinct() || AppBookSpecification.hasCollectionJoin(root));
             return predicate;
         };
-    }
-
-    private static boolean hasCollectionJoin(From<?, ?> from) {
-        return from.getJoins().stream().anyMatch(join ->
-                join.getAttribute().isCollection() || hasCollectionJoin(join));
     }
 
     private interface BookIdProjection {

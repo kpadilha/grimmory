@@ -76,6 +76,8 @@ class BookBrowseServiceTest {
     private BookBrowseService browseService;
     @Autowired
     private BookRepository bookRepository;
+    @Autowired
+    private org.booklore.service.book.BookQueryService bookQueryService;
     @MockitoBean
     private AuthenticationService authenticationService;
 
@@ -321,6 +323,22 @@ class BookBrowseServiceTest {
         em.flush();
 
         assertThat(browseService.findAllIds(null, null, null, null)).containsExactly(inLibrary);
+    }
+
+    @Test
+    void adminLegacyPageExcludesDeletedBooksAndCountsOnlyVisibleOnes() {
+        BookEntity first = book("First", List.of());
+        BookEntity second = book("Second", List.of());
+        book("Gone", List.of()).setDeleted(true);
+        em.flush();
+        em.clear();
+
+        org.springframework.data.domain.Page<Book> page = bookQueryService.getAllBooksPaged(PageRequest.of(0, 1));
+        org.springframework.data.domain.Page<Book> next = bookQueryService.getAllBooksPaged(PageRequest.of(1, 1));
+
+        assertThat(page.getTotalElements()).isEqualTo(2);
+        assertThat(java.util.stream.Stream.concat(page.getContent().stream(), next.getContent().stream()).map(Book::getId))
+                .containsExactlyInAnyOrder(first.getId(), second.getId());
     }
 
     @Test

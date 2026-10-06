@@ -478,15 +478,6 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     List<BookEntity> findAllForRecommendation(@Param("excludeBookId") Long excludeBookId);
 
     /**
-     * Paginated query for all non-deleted books (main UI listing).
-     * Only ToOne paths in EntityGraph to avoid Cartesian product with LIMIT;
-     * collections (authors, categories, tags, moods, shelves, bookFiles) loaded via @BatchSize.
-     */
-    @EntityGraph(attributePaths = {"metadata", "metadata.comicMetadata", "libraryPath", "library"})
-    @Query("SELECT b FROM BookEntity b WHERE (b.deleted IS NULL OR b.deleted = false)")
-    Page<BookEntity> findAllWithMetadataPage(Pageable pageable);
-
-    /**
      * Paginated query for non-deleted books filtered by library IDs.
      * Only ToOne paths in EntityGraph to avoid Cartesian product with LIMIT;
      * collections (authors, categories, tags, moods, shelves, bookFiles) loaded via @BatchSize.
