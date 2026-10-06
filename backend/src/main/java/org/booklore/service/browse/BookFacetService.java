@@ -12,6 +12,7 @@ import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 import lombok.RequiredArgsConstructor;
+import org.booklore.app.specification.AppBookSpecification;
 import org.booklore.browse.FacetLogic;
 import org.booklore.browse.ParamsHash;
 import org.booklore.config.security.service.AuthenticationService;
@@ -22,17 +23,22 @@ import org.booklore.model.dto.browse.FacetGroupsResponse.FacetGroup;
 import org.booklore.model.dto.browse.FacetValueBookIds;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
+import org.booklore.model.entity.BookMetadataAuthorMapping;
+import org.booklore.model.entity.BookMetadataCategoryMapping;
 import org.booklore.model.entity.UserBookProgressEntity;
 import org.booklore.model.enums.ReadStatus;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.text.Collator;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -51,8 +57,8 @@ public class BookFacetService {
                     .otherwise(cb.nullLiteral(String.class)));
 
     private static final List<FacetDef> FACETS = List.of(
-            new FacetDef("author", "Authors", (cb, root, _) -> metadata(root).join("authors", JoinType.LEFT).get("name")),
-            new FacetDef("genre", "Genre", (cb, root, _) -> metadata(root).join("categories", JoinType.LEFT).get("name")),
+            new FacetDef("author", "Authors", true, (cb, root, _) -> byBookId(cb, root, BookMetadataAuthorMapping.class).join("author", JoinType.LEFT).get("name")),
+            new FacetDef("genre", "Genre", true, (cb, root, _) -> byBookId(cb, root, BookMetadataCategoryMapping.class).join("category", JoinType.LEFT).get("name")),
             new FacetDef("tag", "Tags", (cb, root, _) -> metadata(root).join("tags", JoinType.LEFT).get("name")),
             new FacetDef("mood", "Moods", (cb, root, _) -> metadata(root).join("moods", JoinType.LEFT).get("name")),
             new FacetDef("series", "Series", (cb, root, _) -> metadata(root).get("seriesName")),
@@ -185,14 +191,28 @@ public class BookFacetService {
 
         cq.multiselect(value.alias("value"), root.get("id").alias("bookId"));
         cq.where(predicates.toArray(Predicate[]::new));
-        cq.orderBy(cb.asc(value));
 
-        Map<String, List<Long>> grouped = new LinkedHashMap<>();
+        // Grouped first, then sorted per distinct value: an SQL ORDER BY multi-pass filesorted every
+        // (value, book) row and re-read each wide book_metadata row.
+        Map<Object, List<Long>> grouped = new HashMap<>();
         for (Tuple tuple : entityManager.createQuery(cq).getResultList()) {
-            String key = String.valueOf(tuple.get("value"));
-            grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(((Number) tuple.get("bookId")).longValue());
+            grouped.computeIfAbsent(tuple.get("value"), k -> new ArrayList<>()).add(((Number) tuple.get("bookId")).longValue());
         }
-        return grouped.entrySet().stream().map(e -> new FacetValueBookIds(e.getKey(), e.getValue())).toList();
+        Collator collator = Collator.getInstance(Locale.ROOT);
+        return grouped.entrySet().stream()
+                .sorted((a, b) -> compareValues(a.getKey(), b.getKey(), collator))
+                .map(e -> new FacetValueBookIds(String.valueOf(e.getKey()), e.getValue()))
+                .toList();
+    }
+
+    // Text in locale order like the DB collation, exact order breaking collator ties; other types natural.
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static int compareValues(Object a, Object b, Collator collator) {
+        if (a instanceof String x && b instanceof String y) {
+            int byLocale = collator.compare(x, y);
+            return byLocale != 0 ? byLocale : x.compareTo(y);
+        }
+        return ((Comparable) a).compareTo(b);
     }
 
     private List<FacetResponseBuilder.FacetCount> count(FacetDef def, Specification<BookEntity> base, BrowseScope scope) {
@@ -200,7 +220,6 @@ public class BookFacetService {
         CriteriaQuery<Tuple> cq = cb.createTupleQuery();
         Root<BookEntity> root = cq.from(BookEntity.class);
         Expression<?> value = def.value().apply(cb, root, scope);
-        Expression<Long> count = cb.countDistinct(root.get("id"));
 
         List<Predicate> predicates = new ArrayList<>();
         Predicate basePredicate = base.toPredicate(root, cq, cb);
@@ -208,6 +227,10 @@ public class BookFacetService {
             predicates.add(basePredicate);
         }
         predicates.add(cb.isNotNull(value));
+        // DISTINCT only when a to-many join can repeat a book; otherwise it just forces an on-disk temp table.
+        Expression<Long> count = def.entityJoin() || AppBookSpecification.hasCollectionJoin(root)
+                ? cb.countDistinct(root.get("id"))
+                : cb.count(root.get("id"));
 
         cq.multiselect(value.alias("value"), count.alias("count"));
         cq.where(predicates.toArray(Predicate[]::new));
@@ -223,10 +246,23 @@ public class BookFacetService {
         return root.join("metadata", JoinType.LEFT);
     }
 
+    // Joins a mapping table straight on the book id: the path through metadata cost one wide
+    // book_metadata row lookup per mapping row, which MariaDB could not eliminate.
+    private static <M> Join<BookEntity, M> byBookId(CriteriaBuilder cb, Root<BookEntity> root, Class<M> mapping) {
+        Join<BookEntity, M> join = root.join(mapping, JoinType.LEFT);
+        join.on(cb.equal(join.get("bookId"), root.get("id")));
+        return join;
+    }
+
     private interface FacetValueSource {
         Expression<?> apply(CriteriaBuilder cb, Root<BookEntity> root, BrowseScope scope);
     }
 
-    private record FacetDef(String key, String title, FacetValueSource value) {
+    // entityJoin: the value comes through a From.join(Class) mapping join, which can repeat a book
+    // but is invisible to the JPA getJoins() that hasCollectionJoin inspects.
+    private record FacetDef(String key, String title, boolean entityJoin, FacetValueSource value) {
+        FacetDef(String key, String title, FacetValueSource value) {
+            this(key, title, false, value);
+        }
     }
 }

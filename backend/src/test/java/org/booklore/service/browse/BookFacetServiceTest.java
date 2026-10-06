@@ -378,6 +378,30 @@ class BookFacetServiceTest {
     }
 
     @Test
+    void bookListingTheSameAuthorTwiceCountsOnce() {
+        BookEntity twice = book("A", "Horror", "Alice");
+        twice.getMetadata().setAuthors(new java.util.ArrayList<>(List.of(author("Alice"), author("Alice"))));
+        book("B", "Horror", "Alice");
+        em.flush();
+
+        assertThat(count(group(facetService.getFacets(null, null, null), "author"), "Alice")).isEqualTo(2L);
+    }
+
+    @Test
+    void getFacetValueBookIdsOrdersValuesAlphabeticallyIgnoringCaseAndAccents() {
+        book("A", "Zed", "Alice");
+        book("B", "Émile", "Alice");
+        book("C", "beta", "Alice");
+        book("D", "Alpha", "Alice");
+        em.flush();
+
+        List<org.booklore.model.dto.browse.FacetValueBookIds> genre = facetService.getFacetValueBookIds(List.of("genre")).get("genre");
+
+        assertThat(genre).extracting(org.booklore.model.dto.browse.FacetValueBookIds::value)
+                .containsExactly("Alpha", "beta", "Émile", "Zed");
+    }
+
+    @Test
     void getFacetValueBookIdsUncappedBeyondTheHundredValueFacetLimit() {
         for (int i = 0; i < 101; i++) {
             book("T" + i, "Genre" + i, "Author" + i);
