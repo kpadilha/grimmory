@@ -273,7 +273,9 @@ public class AuthorMetadataService {
             throw ApiError.GENERIC_BAD_REQUEST.createException("Failed to fetch author metadata");
         }
 
-        applyMetadataResult(author, result);
+        if (!applyMetadataResult(author, result)) {
+            throw ApiError.GENERIC_BAD_REQUEST.createException("ASIN is locked to a different author");
+        }
         authorRepository.save(author);
 
         auditService.log(AuditAction.AUTHOR_METADATA_UPDATED, "Author", authorId,
@@ -291,8 +293,7 @@ public class AuthorMetadataService {
         List<String> titles = authorRepository.findBookTitlesByAuthorId(authorId);
         for (AuthorParser provider : authorParserMap.values()) {
             AuthorSearchResult result = provider.quickSearch(author.getName(), region, titles);
-            if (result != null) {
-                applyMetadataResult(author, result);
+            if (result != null && applyMetadataResult(author, result)) {
                 authorRepository.save(author);
 
                 auditService.log(AuditAction.AUTHOR_METADATA_UPDATED, "Author", authorId,
@@ -537,13 +538,14 @@ public class AuthorMetadataService {
     }
 
     /** Replaces any previous match: its other-provider id, bio and photo go unless locked, so a re-match never mixes two authors. */
-    private void applyMetadataResult(AuthorEntity author, AuthorSearchResult result) {
+    /** False, with nothing changed, when a locked ASIN names a different author than the result. */
+    private boolean applyMetadataResult(AuthorEntity author, AuthorSearchResult result) {
         boolean lockedToAnotherAuthor = author.isAsinLocked() && author.getAsin() != null
                 && !(result.getSource() == AuthorMetadataSource.AUDNEXUS && author.getAsin().equals(result.getAsin()));
         if (lockedToAnotherAuthor) {
             log.info("Author {} keeps locked ASIN {}; not importing {} data from a different author",
                     author.getId(), author.getAsin(), result.getSource());
-            return;
+            return false;
         }
         boolean previouslyMatched = author.getAsin() != null || author.getOpenLibraryId() != null;
         if (result.getSource() == AuthorMetadataSource.OPENLIBRARY) {
@@ -562,13 +564,14 @@ public class AuthorMetadataService {
             author.setDescription(result.getDescription());
         }
         if (author.isPhotoLocked()) {
-            return;
+            return true;
         }
         if (result.getImageUrl() != null && !result.getImageUrl().isBlank()) {
             fileService.createAuthorThumbnailFromUrl(author.getId(), result.getImageUrl());
         } else if (previouslyMatched) {
             fileService.deleteAuthorImages(author.getId());
         }
+        return true;
     }
 
     private static String sourceId(AuthorSearchResult result) {

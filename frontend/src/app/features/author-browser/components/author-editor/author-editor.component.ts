@@ -63,6 +63,7 @@ export class AuthorEditorComponent implements OnInit, OnChanges {
     if (changes['author'] && !changes['author'].firstChange) {
       this.hasPhoto = true;
       this.photoTimestamp = Date.now();
+      this.syncLocks(this.author);
     }
   }
 
@@ -142,6 +143,7 @@ export class AuthorEditorComponent implements OnInit, OnChanges {
       if (result) {
         this.photoTimestamp = Date.now();
         this.hasPhoto = true;
+        this.form.get('photoLocked')?.setValue(true);
         this.authorUpdated.emit(this.author);
       }
     });
@@ -159,6 +161,7 @@ export class AuthorEditorComponent implements OnInit, OnChanges {
     this.isUploading.set(false);
     this.photoTimestamp = Date.now();
     this.hasPhoto = true;
+    this.form.get('photoLocked')?.setValue(true);
     this.authorUpdated.emit(this.author);
     this.messageService.add({
       severity: 'success',
@@ -194,6 +197,7 @@ export class AuthorEditorComponent implements OnInit, OnChanges {
     this.authorService.updateAuthor(this.authorId, request).subscribe({
       next: (updated) => {
         this.isSaving.set(false);
+        this.syncLocks(updated);
         this.authorUpdated.emit(updated);
         this.messageService.add({
           severity: 'success',
@@ -212,12 +216,27 @@ export class AuthorEditorComponent implements OnInit, OnChanges {
     });
   }
 
+  // The server locks hand edits and uploaded photos; the form must send those locks back, not stale ones.
+  private syncLocks(author: AuthorDetails): void {
+    if (!this.form) return;
+    this.form.patchValue({
+      nameLocked: author.nameLocked || false,
+      descriptionLocked: author.descriptionLocked || false,
+      asinLocked: author.asinLocked || false,
+      photoLocked: author.photoLocked || false
+    });
+    this.applyLockStates();
+  }
+
   private applyLockStates(): void {
     for (const field of ['name', 'description', 'asin']) {
       const lockedControl = this.form.get(field + 'Locked');
       const fieldControl = this.form.get(field);
-      if (lockedControl?.value && fieldControl) {
+      if (!fieldControl) continue;
+      if (lockedControl?.value) {
         fieldControl.disable();
+      } else {
+        fieldControl.enable();
       }
     }
   }

@@ -566,7 +566,6 @@ class AuthorMetadataServiceTest {
     @Test
     void rematch_keepsLockedFields() {
         AuthorEntity author = matchedAuthor("B07Q8QS2G1", null);
-        author.setAsinLocked(true);
         author.setDescriptionLocked(true);
         author.setPhotoLocked(true);
         when(openLibraryParser.getAuthorByAsin("OL9828296A", "us")).thenReturn(AuthorSearchResult.builder()
@@ -574,7 +573,8 @@ class AuthorMetadataServiceTest {
 
         service.matchAuthor(1L, matchRequest(AuthorMetadataSource.OPENLIBRARY, "OL9828296A"));
 
-        assertThat(author.getAsin()).isEqualTo("B07Q8QS2G1");
+        assertThat(author.getOpenLibraryId()).isEqualTo("OL9828296A");
+        assertThat(author.getAsin()).isNull();
         assertThat(author.getDescription()).isEqualTo("Previous match's bio");
         verify(fileService, never()).deleteAuthorImages(anyLong());
     }
@@ -616,7 +616,11 @@ class AuthorMetadataServiceTest {
         when(openLibraryParser.getAuthorByAsin("OL9828296A", "us")).thenReturn(AuthorSearchResult.builder()
                 .source(AuthorMetadataSource.OPENLIBRARY).openLibraryId("OL9828296A").name("A. C. Cobble").build());
 
-        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.OPENLIBRARY, "OL9828296A"));
+        // The hand-typed ASIN is now locked, so another provider's author is refused outright.
+        assertThatThrownBy(() -> service.matchAuthor(1L, matchRequest(AuthorMetadataSource.OPENLIBRARY, "OL9828296A")))
+                .hasMessageContaining("locked to a different author");
+        assertThat(author.isDescriptionLocked()).isTrue();
+        assertThat(author.isAsinLocked()).isTrue();
 
         assertThat(author.getDescription()).isEqualTo("My own notes");
         assertThat(author.getAsin()).isEqualTo("B0COBBLE01");
@@ -630,12 +634,32 @@ class AuthorMetadataServiceTest {
                 .source(AuthorMetadataSource.AUDNEXUS).asin("B07Q8QS2G1").name("C. C. Mitchell")
                 .description("Someone else").imageUrl("https://example.com/mitchell.jpg").build());
 
-        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.AUDNEXUS, "B07Q8QS2G1"));
+        assertThatThrownBy(() -> service.matchAuthor(1L, matchRequest(AuthorMetadataSource.AUDNEXUS, "B07Q8QS2G1")))
+                .hasMessageContaining("locked to a different author");
 
         assertThat(author.getAsin()).isEqualTo("B0COBBLE01");
         assertThat(author.getDescription()).isEqualTo("Previous match's bio");
         verify(fileService, never()).createAuthorThumbnailFromUrl(anyLong(), anyString());
         verify(fileService, never()).deleteAuthorImages(anyLong());
+        verify(authorRepository, never()).save(any());
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void quickMatchTriesNextProviderWhenLockedAsinBlocksAMatch() {
+        AuthorEntity author = matchedAuthor("B0COBBLE01", null);
+        author.setAsinLocked(true);
+        when(authorParser.quickSearch(eq("A C Cobble"), eq("us"), any())).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.AUDNEXUS).asin("B07Q8QS2G1").name("A.C. Cobble").build());
+        when(openLibraryParser.quickSearch(eq("A C Cobble"), eq("us"), any())).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.OPENLIBRARY).openLibraryId("OL9828296A").name("A. C. Cobble").build());
+
+        assertThatThrownBy(() -> service.quickMatchAuthor(1L, "us")).hasMessageContaining("No metadata found");
+
+        verify(authorParser).quickSearch(eq("A C Cobble"), eq("us"), any());
+        verify(openLibraryParser).quickSearch(eq("A C Cobble"), eq("us"), any());
+        assertThat(author.getOpenLibraryId()).isNull();
+        verifyNoInteractions(auditService);
     }
 
     @Test
