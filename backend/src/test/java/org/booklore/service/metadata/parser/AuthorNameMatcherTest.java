@@ -54,4 +54,29 @@ class AuthorNameMatcherTest {
         assertThat(AuthorNameMatcher.normaliseTitle("The Way of Kings: Book One of the Stormlight Archive"))
                 .isEqualTo("the way of kings");
     }
+
+    @Test
+    void generationalSuffixIsOptionalButMustAgree() {
+        assertThat(AuthorNameMatcher.matches("Kurt Vonnegut, Jr.", "Kurt Vonnegut Jr.")).isTrue();
+        assertThat(AuthorNameMatcher.matches("Vonnegut, Kurt, Jr.", "Kurt Vonnegut Jr.")).isTrue();
+        assertThat(AuthorNameMatcher.matches("Kurt Vonnegut", "Kurt Vonnegut Jr.")).isTrue();
+        assertThat(AuthorNameMatcher.matches("John Smith Jr.", "John Smith Sr.")).isFalse();
+        assertThat(AuthorNameMatcher.matches("John Smith III", "John Smith II")).isFalse();
+    }
+
+    @Test
+    void allCapsInitials() {
+        assertThat(AuthorNameMatcher.matches("JK ROWLING", "J.K. Rowling")).isTrue();
+        assertThat(AuthorNameMatcher.matches("J. K. ROWLING", "JK Rowling")).isTrue();
+    }
+
+    @Test
+    void transliteratesLettersNfkdKeepsWhole() {
+        assertThat(AuthorNameMatcher.matches("Søren Kierkegaard", "Soren Kierkegaard")).isTrue();
+        assertThat(AuthorNameMatcher.matches("Stanisław Lem", "Stanislaw Lem")).isTrue();
+        assertThat(AuthorNameMatcher.matches("Bernhard Schlößer", "Bernhard Schlosser")).isTrue();
+        assertThat(AuthorNameMatcher.matches("Æsa Jónsdóttir", "Aesa Jonsdottir")).isTrue();
+        assertThat(AuthorNameMatcher.matches("Đorđe Balašević", "Dorde Balasevic")).isTrue();
+        assertThat(AuthorNameMatcher.matches("Þóra Hjörleifsdóttir", "Thora Hjorleifsdottir")).isTrue();
+    }
 }

@@ -276,10 +276,6 @@ public class AuthorMetadataService {
         applyMetadataResult(author, result);
         authorRepository.save(author);
 
-        if (!author.isPhotoLocked() && result.getImageUrl() != null && !result.getImageUrl().isBlank()) {
-            fileService.createAuthorThumbnailFromUrl(author.getId(), result.getImageUrl());
-        }
-
         auditService.log(AuditAction.AUTHOR_METADATA_UPDATED, "Author", authorId,
                 "Matched author '" + author.getName() + "' via " + result.getSource() + " (" + sourceId(result) + ")");
 
@@ -298,10 +294,6 @@ public class AuthorMetadataService {
             if (result != null) {
                 applyMetadataResult(author, result);
                 authorRepository.save(author);
-
-                if (!author.isPhotoLocked() && result.getImageUrl() != null && !result.getImageUrl().isBlank()) {
-                    fileService.createAuthorThumbnailFromUrl(author.getId(), result.getImageUrl());
-                }
 
                 auditService.log(AuditAction.AUTHOR_METADATA_UPDATED, "Author", authorId,
                         "Quick-matched author '" + author.getName() + "' via " + result.getSource() + " (" + sourceId(result) + ")");
@@ -521,15 +513,31 @@ public class AuthorMetadataService {
         }
     }
 
+    /** Replaces any previous match: its other-provider id, bio and photo go unless locked, so a re-match never mixes two authors. */
     private void applyMetadataResult(AuthorEntity author, AuthorSearchResult result) {
-        // OpenLibrary records often lack a bio; a match must not erase the one the author already has.
-        if (!author.isDescriptionLocked() && result.getDescription() != null) {
-            author.setDescription(result.getDescription());
-        }
+        boolean previouslyMatched = author.getAsin() != null || author.getOpenLibraryId() != null;
         if (result.getSource() == AuthorMetadataSource.OPENLIBRARY) {
             author.setOpenLibraryId(result.getOpenLibraryId());
-        } else if (!author.isAsinLocked()) {
-            author.setAsin(result.getAsin());
+            if (!author.isAsinLocked()) {
+                author.setAsin(null);
+            }
+        } else {
+            author.setOpenLibraryId(null);
+            if (!author.isAsinLocked()) {
+                author.setAsin(result.getAsin());
+            }
+        }
+        // Without a previous match the bio is the user's own, and a provider without one must not erase it.
+        if (!author.isDescriptionLocked() && (result.getDescription() != null || previouslyMatched)) {
+            author.setDescription(result.getDescription());
+        }
+        if (author.isPhotoLocked()) {
+            return;
+        }
+        if (result.getImageUrl() != null && !result.getImageUrl().isBlank()) {
+            fileService.createAuthorThumbnailFromUrl(author.getId(), result.getImageUrl());
+        } else if (previouslyMatched) {
+            fileService.deleteAuthorImages(author.getId());
         }
     }
 

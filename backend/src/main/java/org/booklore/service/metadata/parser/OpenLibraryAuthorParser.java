@@ -25,7 +25,7 @@ public class OpenLibraryAuthorParser implements AuthorParser {
 
     private static final String BASE_URI = "https://openlibrary.org";
     private static final String COVERS_URI = "https://covers.openlibrary.org";
-    private static final Pattern OLID = Pattern.compile("OL\\d+A");
+    private static final Pattern OLID = Pattern.compile("OL\\d{1,17}A");
     private static final int SEARCH_LIMIT = 10;
     // OpenLibrary keeps many duplicate records per author; only the biggest few are worth a works lookup.
     private static final int MAX_WORK_LOOKUPS = 3;

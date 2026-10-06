@@ -46,6 +46,7 @@ class AuthorMetadataServiceTest {
 
     @Mock private AuthorRepository authorRepository;
     @Mock private AuthorParser authorParser;
+    @Mock private AuthorParser openLibraryParser;
     @Mock private AuditService auditService;
     @Mock private FileService fileService;
     @Mock private DuckDuckGoCoverService duckDuckGoCoverService;
@@ -57,7 +58,8 @@ class AuthorMetadataServiceTest {
     @BeforeEach
     void setUp() {
         Map<AuthorMetadataSource, AuthorParser> authorParserMap = Map.of(
-                AuthorMetadataSource.AUDNEXUS, authorParser
+                AuthorMetadataSource.AUDNEXUS, authorParser,
+                AuthorMetadataSource.OPENLIBRARY, openLibraryParser
         );
 
         service = new AuthorMetadataService(
@@ -507,5 +509,84 @@ class AuthorMetadataServiceTest {
         lenient().when(row.getLastReadTime()).thenReturn(lastReadTime);
         lenient().when(row.getPersonalRating()).thenReturn(rating);
         return row;
+    }
+
+    private AuthorEntity matchedAuthor(String asin, String openLibraryId) {
+        AuthorEntity author = new AuthorEntity();
+        author.setId(1L);
+        author.setName("A C Cobble");
+        author.setAsin(asin);
+        author.setOpenLibraryId(openLibraryId);
+        author.setDescription("Previous match's bio");
+        when(authorRepository.findById(1L)).thenReturn(Optional.of(author));
+        when(authorRepository.save(any(AuthorEntity.class))).thenAnswer(i -> i.getArgument(0));
+        return author;
+    }
+
+    private static AuthorMatchRequest matchRequest(AuthorMetadataSource source, String id) {
+        AuthorMatchRequest request = new AuthorMatchRequest();
+        request.setSource(source);
+        request.setAsin(source == AuthorMetadataSource.AUDNEXUS ? id : null);
+        request.setOpenLibraryId(source == AuthorMetadataSource.OPENLIBRARY ? id : null);
+        return request;
+    }
+
+    @Test
+    void rematchFromAudibleToOpenLibrary_dropsThePreviousMatch() {
+        AuthorEntity author = matchedAuthor("B07Q8QS2G1", null);
+        when(openLibraryParser.getAuthorByAsin("OL9828296A", "us")).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.OPENLIBRARY).openLibraryId("OL9828296A").name("A. C. Cobble").build());
+
+        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.OPENLIBRARY, "OL9828296A"));
+
+        assertThat(author.getOpenLibraryId()).isEqualTo("OL9828296A");
+        assertThat(author.getAsin()).isNull();
+        assertThat(author.getDescription()).isNull();
+        verify(fileService).deleteAuthorImages(1L);
+        verify(fileService, never()).createAuthorThumbnailFromUrl(anyLong(), anyString());
+    }
+
+    @Test
+    void rematchFromOpenLibraryToAudible_dropsThePreviousMatch() {
+        AuthorEntity author = matchedAuthor(null, "OL9828296A");
+        when(authorParser.getAuthorByAsin("B0COBBLE01", "us")).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.AUDNEXUS).asin("B0COBBLE01").name("A.C. Cobble")
+                .imageUrl("https://example.com/cobble.jpg").build());
+
+        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.AUDNEXUS, "B0COBBLE01"));
+
+        assertThat(author.getAsin()).isEqualTo("B0COBBLE01");
+        assertThat(author.getOpenLibraryId()).isNull();
+        assertThat(author.getDescription()).isNull();
+        verify(fileService).createAuthorThumbnailFromUrl(1L, "https://example.com/cobble.jpg");
+        verify(fileService, never()).deleteAuthorImages(anyLong());
+    }
+
+    @Test
+    void rematch_keepsLockedFields() {
+        AuthorEntity author = matchedAuthor("B07Q8QS2G1", null);
+        author.setAsinLocked(true);
+        author.setDescriptionLocked(true);
+        author.setPhotoLocked(true);
+        when(openLibraryParser.getAuthorByAsin("OL9828296A", "us")).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.OPENLIBRARY).openLibraryId("OL9828296A").name("A. C. Cobble").build());
+
+        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.OPENLIBRARY, "OL9828296A"));
+
+        assertThat(author.getAsin()).isEqualTo("B07Q8QS2G1");
+        assertThat(author.getDescription()).isEqualTo("Previous match's bio");
+        verify(fileService, never()).deleteAuthorImages(anyLong());
+    }
+
+    @Test
+    void firstMatchWithoutBio_keepsTheUsersDescriptionAndPhoto() {
+        AuthorEntity author = matchedAuthor(null, null);
+        when(openLibraryParser.getAuthorByAsin("OL9828296A", "us")).thenReturn(AuthorSearchResult.builder()
+                .source(AuthorMetadataSource.OPENLIBRARY).openLibraryId("OL9828296A").name("A. C. Cobble").build());
+
+        service.matchAuthor(1L, matchRequest(AuthorMetadataSource.OPENLIBRARY, "OL9828296A"));
+
+        assertThat(author.getDescription()).isEqualTo("Previous match's bio");
+        verify(fileService, never()).deleteAuthorImages(anyLong());
     }
 }
