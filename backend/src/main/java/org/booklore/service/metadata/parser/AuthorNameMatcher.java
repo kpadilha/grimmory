@@ -22,6 +22,8 @@ public final class AuthorNameMatcher {
     // Letters NFKD leaves whole, so accent stripping alone would keep "Søren" and "Soren" apart.
     private static final Map<String, String> TRANSLITERATIONS = Map.of(
             "ø", "o", "ł", "l", "ß", "ss", "æ", "ae", "œ", "oe", "đ", "d", "þ", "th");
+    private static final Pattern DOTTED_INITIALS = Pattern.compile("\\p{L}\\.?|(\\p{L}\\.)+\\p{L}?");
+    private static final Pattern CAPS_RUN = Pattern.compile("\\p{Lu}{2,3}");
     private static final Set<String> SUFFIXES = Set.of("jr", "sr", "ii", "iii", "iv");
 
     record Name(String base, String suffix) {}
@@ -35,14 +37,13 @@ public final class AuthorNameMatcher {
     }
 
     /**
-     * Equal names, where a generational suffix only has to agree when both sides carry one.
-     * Every short given-name token is spelt out letter by letter on both sides, so "AC", "A.C." and "A. C." compare equal.
+     * Equal names and equal generational suffixes ("Kurt Vonnegut" is not "Kurt Vonnegut Sr.").
+     * Only tokens written as initials are spelt out letter by letter, so "Al Smith" never equals "A. L. Smith".
      */
     public static boolean matches(String ours, String theirs) {
         Name a = parse(ours);
         Name b = parse(theirs);
-        if (a.base().isEmpty() || !a.base().equals(b.base())) return false;
-        return a.suffix().isEmpty() || b.suffix().isEmpty() || a.suffix().equals(b.suffix());
+        return !a.base().isEmpty() && a.base().equals(b.base()) && a.suffix().equals(b.suffix());
     }
 
     static Name parse(String name) {
@@ -54,27 +55,36 @@ public final class AuthorNameMatcher {
             if (SUFFIXES.contains(folded)) {
                 suffix = folded;
             } else if (!folded.isEmpty()) {
-                parts.add(folded);
+                parts.add(part.strip());
             }
         }
         if (parts.size() == 2) {
             parts = List.of(parts.get(1), parts.get(0));
         }
-        List<String> tokens = new ArrayList<>(Arrays.asList(String.join(" ", parts).split(" ")));
-        tokens.removeIf(String::isEmpty);
-        if (tokens.size() > 2 && SUFFIXES.contains(tokens.getLast())) {
-            suffix = tokens.removeLast();
+        String raw = String.join(" ", parts);
+        boolean allCaps = raw.equals(raw.toUpperCase(Locale.ROOT));
+        List<String> rawTokens = new ArrayList<>(Arrays.asList(raw.split("\\s+")));
+        rawTokens.removeIf(t -> fold(t).isEmpty());
+        if (rawTokens.size() > 2 && SUFFIXES.contains(fold(rawTokens.getLast()))) {
+            suffix = fold(rawTokens.removeLast());
         }
         List<String> out = new ArrayList<>();
-        for (int i = 0; i < tokens.size(); i++) {
-            String token = tokens.get(i);
-            if (i < tokens.size() - 1 && token.length() <= 3) {
-                token.chars().forEach(c -> out.add(String.valueOf((char) c)));
+        for (int i = 0; i < rawTokens.size(); i++) {
+            String folded = fold(rawTokens.get(i));
+            if (i < rawTokens.size() - 1 && isInitials(rawTokens.get(i), allCaps)) {
+                folded.replace(" ", "").chars().forEach(c -> out.add(String.valueOf((char) c)));
             } else {
-                out.add(token);
+                out.addAll(Arrays.asList(folded.split(" ")));
             }
         }
         return new Name(String.join(" ", out), suffix);
+    }
+
+    // "A.", "A.C.", "AC" in "AC Cobble", "JK" in "JK ROWLING"; a plain short word ("Al", "LEE") stays a word.
+    private static boolean isInitials(String token, boolean allCapsName) {
+        if (DOTTED_INITIALS.matcher(token).matches()) return true;
+        if (!CAPS_RUN.matcher(token).matches()) return false;
+        return allCapsName ? token.length() <= 2 : token.length() <= 3;
     }
 
     /** Query spellings worth sending for a name with leading initials: as given, "A.C. Cobble" and "A. C. Cobble". */

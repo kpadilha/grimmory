@@ -56,10 +56,11 @@ class AuthorNameMatcherTest {
     }
 
     @Test
-    void generationalSuffixIsOptionalButMustAgree() {
+    void generationalSuffixMustAgree() {
         assertThat(AuthorNameMatcher.matches("Kurt Vonnegut, Jr.", "Kurt Vonnegut Jr.")).isTrue();
         assertThat(AuthorNameMatcher.matches("Vonnegut, Kurt, Jr.", "Kurt Vonnegut Jr.")).isTrue();
-        assertThat(AuthorNameMatcher.matches("Kurt Vonnegut", "Kurt Vonnegut Jr.")).isTrue();
+        assertThat(AuthorNameMatcher.matches("Kurt Vonnegut", "Kurt Vonnegut Jr.")).isFalse();
+        assertThat(AuthorNameMatcher.matches("Kurt Vonnegut", "Kurt Vonnegut Sr.")).isFalse();
         assertThat(AuthorNameMatcher.matches("John Smith Jr.", "John Smith Sr.")).isFalse();
         assertThat(AuthorNameMatcher.matches("John Smith III", "John Smith II")).isFalse();
     }
@@ -68,6 +69,15 @@ class AuthorNameMatcherTest {
     void allCapsInitials() {
         assertThat(AuthorNameMatcher.matches("JK ROWLING", "J.K. Rowling")).isTrue();
         assertThat(AuthorNameMatcher.matches("J. K. ROWLING", "JK Rowling")).isTrue();
+        assertThat(AuthorNameMatcher.matches("LEE CHILD", "Lee Child")).isTrue();
+    }
+
+    @Test
+    void shortGivenNamesAreWordsNotInitials() {
+        assertThat(AuthorNameMatcher.matches("Al Smith", "A. L. Smith")).isFalse();
+        assertThat(AuthorNameMatcher.matches("Ed Lee", "E. D. Lee")).isFalse();
+        assertThat(AuthorNameMatcher.matches("Jo Walton", "J. O. Walton")).isFalse();
+        assertThat(AuthorNameMatcher.matches("Ursula K. Le Guin", "Ursula K Le Guin")).isTrue();
     }
 
     @Test
