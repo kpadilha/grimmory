@@ -117,7 +117,7 @@ public class SeriesSummaryService {
         progress.on(cb.equal(progress.get("user").get("id"), userId));
 
         Expression<String> seriesNameTrimmed = cb.trim(metadata.get("seriesName"));
-        Expression<String> seriesKey = cb.lower(seriesNameTrimmed);
+        Expression<String> seriesKey = metadata.get("seriesKey");
 
         List<Predicate> predicates = new ArrayList<>();
         Predicate basePredicate = base.toPredicate(root, cq, cb);
@@ -272,7 +272,7 @@ public class SeriesSummaryService {
         return (root, query, cb) -> {
             Fetch<BookEntity, BookMetadataEntity> fetch = root.fetch("metadata", JoinType.INNER);
             Join<BookEntity, BookMetadataEntity> metadata = (Join<BookEntity, BookMetadataEntity>) fetch;
-            return cb.lower(cb.trim(metadata.get("seriesName"))).in(keys);
+            return metadata.get("seriesKey").in(keys);
         };
     }
 

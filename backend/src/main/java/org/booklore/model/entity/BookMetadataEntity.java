@@ -53,6 +53,12 @@ public class BookMetadataEntity {
     @Column(name = "series_name")
     private String seriesName;
 
+    // DB-computed series grouping key; indexed so series lookups avoid a full LOWER(TRIM()) scan.
+    @Column(name = "series_key", insertable = false, updatable = false,
+            columnDefinition = "VARCHAR(1000) GENERATED ALWAYS AS (LOWER(TRIM(series_name)))")
+    @Setter(AccessLevel.NONE)
+    private String seriesKey;
+
     @Column(name = "series_number")
     private Float seriesNumber;
 

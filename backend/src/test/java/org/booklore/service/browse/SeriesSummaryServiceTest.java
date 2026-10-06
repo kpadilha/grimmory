@@ -137,6 +137,22 @@ class SeriesSummaryServiceTest {
     }
 
     @Test
+    void groupsAndHydratesSeriesNamesDifferingOnlyInCaseAndSurroundingSpaces() {
+        bookInSeries("Book One", "Chronicles", 1f, "Author A", "Fantasy");
+        bookInSeries("Book Two", " chronicles ", 2f, "Author B", "Fantasy");
+        bookInSeries("Book Three", "CHRONICLES", 3f, "Author C", "Fantasy");
+        em.flush();
+        em.clear();
+
+        List<SeriesSummary> content = summaries(0, 20, null, null, null).content();
+
+        assertThat(content).hasSize(1);
+        assertThat(content.get(0).getBookCount()).isEqualTo(3);
+        assertThat(content.get(0).getAuthors()).containsExactlyInAnyOrder("Author A", "Author B", "Author C");
+        assertThat(content.get(0).getCoverBooks()).hasSize(3);
+    }
+
+    @Test
     void capsCoverBooksAtThreeOrderedBySeriesNumber() {
         bookInSeries("Book Four", "Saga", 4f, "Author A", "Fantasy");
         bookInSeries("Book One", "Saga", 1f, "Author A", "Fantasy");
