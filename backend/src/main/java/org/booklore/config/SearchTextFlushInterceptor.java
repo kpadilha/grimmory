@@ -5,9 +5,11 @@ import org.hibernate.Interceptor;
 import org.hibernate.collection.spi.PersistentCollection;
 import org.hibernate.type.Type;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.List;
 
 /**
  * Recomputes a book's search text when only its authors, categories or tags changed: JPA fires no
@@ -18,8 +20,12 @@ public class SearchTextFlushInterceptor implements Interceptor {
 
     @Override
     public void preFlush(Iterator<Object> entities) {
-        while (entities.hasNext()) {
-            if (entities.next() instanceof BookMetadataEntity metadata
+        // The iterator walks the live persistence-context map, and recomputing initialises lazy
+        // authors and tags into that map: walking it after a load threw ConcurrentModificationException.
+        List<Object> snapshot = new ArrayList<>();
+        entities.forEachRemaining(snapshot::add);
+        for (Object entity : snapshot) {
+            if (entity instanceof BookMetadataEntity metadata
                     && (changed(metadata.getAuthors()) || changed(metadata.getCategories()) || changed(metadata.getTags()))) {
                 metadata.updateSearchText();
             }
